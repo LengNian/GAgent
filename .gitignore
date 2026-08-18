@@ -1,0 +1,9 @@
+config/.env
+config/.env.example
+__pycache__/
+.vscode/
+*.pyc
+.pytest_cache/
+.venv/
+AGENTS.md
+doc/
