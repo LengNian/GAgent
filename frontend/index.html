@@ -1,1 +1,47 @@
 <!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f4f6">
+  <title>NMS Agent</title>
+  <link rel="stylesheet" href="./styles.css">
+  <script defer src="./app.js"></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">N</span>
+        <span class="brand-copy"><strong>NMS Agent</strong><small>运维对话</small></span>
+      </div>
+      <div class="topbar-actions">
+        <span class="session-status"><i id="statusDot" aria-hidden="true"></i><span id="sessionStatus">无活动会话</span></span>
+        <button class="button primary" id="newThread" type="button"><b aria-hidden="true">+</b> 新对话</button>
+      </div>
+    </header>
+    <main class="workspace">
+      <section class="conversation" aria-label="对话区域">
+        <header class="conversation-header">
+          <div><p class="eyebrow">NMS / ASSISTANT</p><h1 id="conversationTitle">从一个问题开始</h1></div>
+          <button class="icon-button hidden" id="clearThread" type="button" title="退出当前会话" aria-label="退出当前会话">×</button>
+        </header>
+        <div class="messages" id="messages" aria-live="polite"></div>
+        <div class="error hidden" id="error" role="alert"><span class="error-icon">!</span><span id="errorText"></span><button class="link-button hidden" id="retry" type="button">重试</button><button class="link-button" id="dismissError" type="button">关闭</button></div>
+        <form class="composer" id="chatForm">
+          <textarea id="input" rows="1" maxlength="4000" disabled placeholder="创建会话后输入问题"></textarea>
+          <div class="composer-footer"><span id="hint">创建会话后可发送</span><span class="counter" id="counter">0 / 4000</span><button class="button send" id="send" type="submit" disabled>发送 <b aria-hidden="true">→</b></button></div>
+        </form>
+      </section>
+      <aside class="rail" aria-label="会话状态">
+        <p class="eyebrow">SESSION</p>
+        <dl><div><dt>状态</dt><dd id="railStatus">未连接</dd></div><div class="thread-id"><dt>会话 ID</dt><dd id="threadId">—</dd></div></dl>
+        <div class="rail-divider"></div>
+        <p class="eyebrow">CONNECTION</p>
+        <p class="connection"><i id="connectionDot"></i><span id="connectionStatus">等待连接</span></p>
+        <p class="rail-note" id="connectionNote">创建会话后连接服务。</p>
+      </aside>
+    </main>
+  </div>
+</body>
+</html>

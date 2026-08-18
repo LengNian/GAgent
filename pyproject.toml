@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "NMS Agent"
 requires-python = ">=3.11"
 dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn>=0.30.0",
   "langchain-core>=0.3.0",
   "langchain-openai>=0.2.0",
   "langgraph>=0.2.0",

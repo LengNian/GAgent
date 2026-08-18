@@ -38,8 +38,8 @@ def create_agent(
 
     chat_model = model or _build_model(settings or get_settings())
 
-    def call_model(state: MessagesState) -> dict[str, list[Any]]:
-        response = chat_model.invoke(state["messages"])
+    async def call_model(state: MessagesState) -> dict[str, list[Any]]:
+        response = await chat_model.ainvoke(state["messages"])
         return {"messages": [response]}
 
     graph = StateGraph(MessagesState)
