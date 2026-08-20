@@ -1,0 +1,24 @@
+tools:
+  - name: query_device_by_ip
+    description: 根据设备 IPv4 地址查询设备当前状态、资源使用情况、接口、邻居、温度和近期事件。
+    enabled: true
+    method: GET
+    endpoint: /api/v1/topology/device
+    timeout_seconds: 10
+    retry_attempts: 2
+    retry_delay_seconds: 0.5
+    argument_locations:
+      ip: query
+    error_messages:
+      "400": 设备 IP 参数缺失或格式无效。
+      "404": 未找到该 IP 对应的设备。
+      "5xx": 设备查询服务暂时不可用，请稍后重试。
+    parameters:
+      type: object
+      properties:
+        ip:
+          type: string
+          format: ipv4
+          description: 要查询的设备 IPv4 地址，例如 192.168.1.76。
+      required:
+        - ip

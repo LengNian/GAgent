@@ -9,7 +9,8 @@
     messages: [],
     busy: false, 
     creating: false, 
-    failedContent: "" 
+    failedContent: "",
+    executionSteps: []
   };
 
   var elements = {};
@@ -58,15 +59,16 @@
 
 
   function updateUi() {
-    // [逻辑规划] 根据是否有会话、是否创建中、是否生成中，统一计算输入框和按钮的可用状态。
+    // [逻辑规划] 没有活动会话或正在创建会话时禁止编辑；模型生成期间允许编辑草稿，但禁止发送。
     var active = Boolean(threadState.threadId);
-    var canSend = active && !threadState.busy && !threadState.creating;
-    elements.input.disabled = !canSend;
+    var canEdit = active && !threadState.creating;
+    var canSend = canEdit && !threadState.busy;
+    elements.input.disabled = !canEdit;
     elements.send.disabled = !canSend || !elements.input.value.trim();
     elements.newThread.disabled = threadState.creating;
     elements.clearThread.classList.toggle("hidden", !active);
     elements.threadId.textContent = threadState.threadId || "—";
-    elements.hint.textContent = !active ? "创建会话后可发送" : threadState.busy ? "正在生成回复" : "Enter 换行，发送按钮提交";
+    elements.hint.textContent = !active ? "创建会话后可发送" : threadState.busy ? "正在生成回复，可编辑下一条问题" : "Enter 换行，发送按钮提交";
     elements.counter.textContent = elements.input.value.length + " / " + MAX_LENGTH;
   }
 
@@ -77,6 +79,32 @@
     elements.errorText.textContent = "";
     elements.retry.classList.add("hidden");
     threadState.failedContent = "";
+  }
+
+
+  function clearExecution() {
+    // [逻辑规划] 清除上一次请求的结构化执行记录，避免不同问题的工具步骤混在一起。
+    threadState.executionSteps = [];
+  }
+
+
+  function appendExecutionStep(eventName, data) {
+    // [逻辑规划] 只保存服务端提供的状态摘要、工具名和脱敏参数，统一由当前助手气泡渲染。
+    // 1. 根据事件类型生成用户可读文本；未知字段不影响已有进度。
+    // 2. 去除连续重复事件，避免后端初始状态和前端即时状态重复显示。
+    // 3. 触发消息重绘，使执行进度始终位于对应的助手消息内部。
+    var step = { type: eventName, message: data.message || "" };
+    if (eventName === "tool_start") {
+      step.message = data.message || ("已选择工具：" + (data.tool_name || "工具") + "。" );
+      if (data.arguments && Object.keys(data.arguments).length) {
+        step.message += " 参数：" + JSON.stringify(data.arguments);
+      }
+    }
+    if (!step.message) return;
+    var lastStep = threadState.executionSteps[threadState.executionSteps.length - 1];
+    if (lastStep && lastStep.type === eventName && lastStep.message === step.message) return;
+    threadState.executionSteps.push(step);
+    render(true);
   }
 
 
@@ -119,7 +147,7 @@
 
 
   function messageNode(message) {
-    // [逻辑规划] 按消息角色创建气泡；生成中的助手消息显示动画，其余内容使用 textContent 渲染。
+    // [逻辑规划] 按消息角色创建气泡；当前助手消息将结构化执行进度与最终回答放在同一气泡内。
     var row = document.createElement("div");
     row.className = "message-row " + message.role;
     var bubble = document.createElement("div");
@@ -128,6 +156,27 @@
     meta.className = "message-meta";
     meta.textContent = message.role === "user" ? "YOU" : "AGENT";
     bubble.appendChild(meta);
+
+    var isCurrentAssistant = message.role === "assistant" && message === threadState.messages[threadState.messages.length - 1];
+    if (isCurrentAssistant && threadState.executionSteps.length) {
+      var thinking = document.createElement("details");
+      thinking.className = "thinking";
+      thinking.open = Boolean(message.streaming);
+      var summary = document.createElement("summary");
+      summary.textContent = "思考过程";
+      thinking.appendChild(summary);
+      var steps = document.createElement("div");
+      steps.className = "thinking-steps";
+      threadState.executionSteps.forEach(function (step) {
+        var item = document.createElement("p");
+        item.className = "thinking-step " + step.type;
+        item.textContent = step.message;
+        steps.appendChild(item);
+      });
+      thinking.appendChild(steps);
+      bubble.appendChild(thinking);
+    }
+
     if (message.streaming && !message.content) {
       var typing = document.createElement("span");
       typing.className = "typing";
@@ -177,6 +226,7 @@
     if (threadState.creating) return;
     threadState.creating = true;
     clearError();
+    clearExecution();
     updateUi();
     setConnection("正在连接", "创建新会话。", "");
     fetch(apiUrl("/api/threads"), { method: "POST", headers: { "Content-Type": "application/json" } })
@@ -199,7 +249,7 @@
 
 
   function loadThread(threadId) {
-    // [逻辑规划] 请求指定会话的历史消息；成功后恢复消息，404 时清除本地会话并提示重新创建。
+    // [逻辑规划] 请求指定会话的历史消息；当前内存会话在刷新后不可恢复，404 或 405 时清除旧 ID 并回到无活动会话。
     threadState.busy = true;
     setCurrentThread(threadId);
     updateHeader();
@@ -207,17 +257,20 @@
     setConnection("正在加载", "恢复当前会话。", "");
     fetch(apiUrl("/api/threads/" + encodeURIComponent(threadId) + "/messages"))
       .then(function (response) {
-        if (response.status === 404) {
+        if (response.status === 404 || response.status === 405) {
           setCurrentThread(null);
           threadState.messages = [];
+          clearError();
+          clearExecution();
           updateHeader();
           render(false);
-          return Promise.reject(new Error("当前会话不可用，请创建新对话。"));
+          return null;
         }
         if (!response.ok) return responseError(response).then(function (message) { throw new Error(message); });
         return response.json();
       })
       .then(function (data) {
+        if (data === null) return;
         threadState.messages = Array.isArray(data) ? data : (data.messages || []);
         render(false);
         setConnection("已连接", "会话已恢复。", "active");
@@ -256,8 +309,12 @@
 
 
   function applyEvent(event, content) {
-    // [逻辑规划] delta 追加文本，done 使用最终文本，error 转换为异常，未知事件保持当前内容。
+    // [逻辑规划] 进度事件只更新独立状态区；delta 追加最终文本，done 使用服务端最终文本，error 转换为异常。
     if (!event) return content;
+    if (event.name === "progress" || event.name === "tool_start" || event.name === "tool_end") {
+      appendExecutionStep(event.name, event.data || {});
+      return content;
+    }
     if (event.name === "delta") return content + (event.data.text || "");
     if (event.name === "done") return (event.data.message && event.data.message.content) || content;
     if (event.name === "error") throw new Error(event.data.message || "Agent 执行失败。");
@@ -302,9 +359,11 @@
     if (!content || threadState.busy || !threadState.threadId) return;
     if (content.length > MAX_LENGTH) { showError("问题不能超过 " + MAX_LENGTH + " 个字符。"); return; }
     clearError();
+    clearExecution();
     threadState.busy = true;
     threadState.messages.push({ role: "user", content: content });
     threadState.messages.push({ role: "assistant", content: "", streaming: true });
+    appendExecutionStep("progress", { message: "正在分析你的问题，判断是否需要调用工具。" });
     elements.input.value = "";
     resizeInput();
     render(true);
@@ -353,6 +412,7 @@
     threadState.messages = [];
     threadState.busy = false;
     clearError();
+    clearExecution();
     updateHeader();
     render(false);
     updateUi();
@@ -372,6 +432,7 @@
   elements.input.addEventListener("input", resizeInput);
   elements.input.addEventListener("keydown", function (event) {
     if (event.key === "Enter" && !event.shiftKey) {
+      if (threadState.busy) return;
       event.preventDefault();
       elements.chatForm.requestSubmit();
     }

@@ -73,6 +73,14 @@ button:disabled, textarea:disabled { cursor: not-allowed; }
 .message-meta { margin-bottom: 6px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
 .message-row.user .message-meta { text-align: right; }
 .message-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 14px; line-height: 1.65; }
+.thinking { margin: 0 0 12px; border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+.thinking summary { cursor: pointer; color: var(--muted); font-size: 12px; font-weight: 700; list-style-position: inside; }
+.thinking summary::marker { color: var(--accent); }
+.thinking-steps { margin-top: 8px; padding-left: 18px; border-left: 2px solid var(--accent-soft); }
+.thinking-step { margin: 0 0 5px; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.thinking-step:last-child { margin-bottom: 0; color: var(--ink); }
+.thinking-step.tool_start { color: var(--accent-dark); }
+.thinking-step.tool_end { color: var(--success); }
 .typing { display: inline-flex; align-items: center; gap: 5px; min-height: 22px; color: var(--muted); font-size: 13px; }
 .typing i { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); animation: pulse 1s infinite ease-in-out; }
 .typing i:nth-child(2) { animation-delay: .12s; }

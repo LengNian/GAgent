@@ -1,5 +1,4 @@
 config/.env
-config/.env.example
 __pycache__/
 .vscode/
 *.pyc

@@ -5,8 +5,10 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.settings import Settings, get_settings
+from app.tools import build_enabled_tools
 
 
 def _build_model(settings: Settings) -> BaseChatModel:
@@ -48,25 +50,36 @@ def create_agent(
     逻辑规划：
     1. 优先使用调用方注入的模型，便于测试和替换模型实现。
     2. 未注入模型时加载缓存配置，并通过 _build_model 创建模型。
-    3. 构建“开始 -> 模型调用 -> 结束”的单节点图，不在此处处理记忆、工具和持久化。
+    3. 读取启用工具并绑定给模型，使模型只能选择 YAML 已声明的 Tool。
+    4. 构建“模型 -> 工具 -> 模型”的条件图；无 Tool 调用时直接结束。
     """
-    chat_model = model or _build_model(settings or get_settings())
+    resolved_settings = settings or get_settings()
+    chat_model = model or _build_model(resolved_settings)
+    tools = build_enabled_tools(resolved_settings)
+    
+    model_with_tools = chat_model.bind_tools(tools) if tools else chat_model
 
     async def call_model(state: MessagesState) -> dict[str, list[Any]]:
         """调用模型一次，并将模型回复追加到图状态。
 
         逻辑规划：
         1. 从状态中读取完整消息列表。
-        2. 异步调用模型，避免阻塞 FastAPI 的流式响应。
-        3. 将单条模型回复包装成 messages 增量返回给 LangGraph。
+        2. 异步调用已绑定工具的模型，避免阻塞 FastAPI 的流式响应。
+        3. 将单条模型回复包装成 messages 增量返回；若模型产生 Tool 调用，由条件边转入工具节点。
         """
 
-        response = await chat_model.ainvoke(state["messages"])
+        response = await model_with_tools.ainvoke(state["messages"])
         return {"messages": [response]}
 
     graph = StateGraph(MessagesState)
     graph.add_node("call_model", call_model)
+    if tools:
+        graph.add_node("tools", ToolNode(tools))
     graph.add_edge(START, "call_model")
-    graph.add_edge("call_model", END)
-    
+    if tools:
+        graph.add_conditional_edges("call_model", tools_condition, {"tools": "tools", END: END})
+        graph.add_edge("tools", "call_model")
+    else:
+        graph.add_edge("call_model", END)
+
     return graph.compile()

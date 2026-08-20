@@ -17,6 +17,13 @@ class ThreadCreatedResponse(BaseModel):
     thread_id: UUID = Field(description="Server-generated UUIDv4 thread identifier")
 
 
+class MessageResponse(BaseModel):
+    """供前端恢复展示的业务消息响应模型。"""
+
+    role: str
+    content: str
+
+
 class ChatRequest(BaseModel):
     """聊天接口接收的用户输入模型。"""
 
@@ -78,6 +85,32 @@ def _chunk_text(chunk: object) -> str:
     return ""
 
 
+def _safe_tool_arguments(arguments: object) -> dict[str, object]:
+    """整理可展示的工具参数，避免把敏感值或复杂原始结构发送到前端。
+
+    逻辑规划：
+    1. 只接受字典参数；模型返回的其他结构视为不可展示，返回空字典。
+    2. 对名称包含 token、key、password、secret 或 credential 的字段隐藏值，避免敏感信息进入 SSE。
+    3. 仅保留 JSON 基础类型；复杂对象不展开，防止前端误把内部工具数据当作用户可读结果。
+    4. 参数整理失败时保持空结果，不影响 Agent 继续执行工具调用。
+    """
+
+    if not isinstance(arguments, dict):
+        return {}
+
+    sensitive_words = ("token", "key", "password", "secret", "credential")
+    safe_arguments: dict[str, object] = {}
+    for name, value in arguments.items():
+        field_name = str(name)
+        if any(word in field_name.lower() for word in sensitive_words):
+            safe_arguments[field_name] = "[已隐藏]"
+        elif value is None or isinstance(value, (str, int, float, bool)):
+            safe_arguments[field_name] = value
+        else:
+            safe_arguments[field_name] = "[复杂参数]"
+    return safe_arguments
+
+
 async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
     """执行 Agent 并将回复转换为 SSE 流。
 
@@ -87,22 +120,70 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
     Yields:
         文本增量、完成或失败事件对应的 SSE 字符串。
     逻辑规划：
-    1. 创建 Agent 并读取模型消息流。
-    2. 提取文本片段，发送 delta 事件并累计最终助手文本。
-    3. 正常完成后追加助手消息，再发送 done 事件。
-    4. 任意执行异常转换为统一 error 事件，最后释放会话运行标记。
+    1. 创建 Agent，并先发送分析状态，让前端区分执行进度和最终答案。
+    2. 监听 LangGraph v2 生命周期事件，工具开始和结束直接转换为结构化进度事件。
+    3. 处理模型流式文本；模型结束事件仅在没有文本流时补发文本，避免最终回答重复。
+    4. 工具参数只发送脱敏后的基础类型，不发送隐藏思维链或原始工具 JSON。
+    5. 正常完成后追加助手消息并发送 done；任意执行异常转换为统一 error 事件。
+    6. 无论成功或失败都释放会话运行标记，避免会话永久处于执行状态。
     """
     assistant_text = ""
+    started_tool_runs: set[str] = set()
+    completed_tool_runs: set[str] = set()
+    streamed_model_runs: set[str] = set()
 
     try:
         agent = create_agent()
-        async for event in agent.astream({"messages": messages}, stream_mode="messages"):
-            message = event[0] if isinstance(event, tuple) else event
-            text = _chunk_text(message)
-            if not text:
+        yield _format_sse_event(
+            "progress",
+            {"stage": "analysis", "message": "正在分析你的问题，判断是否需要调用工具。"},
+        )
+        async for event in agent.astream_events({"messages": messages}, version="v2"):
+            event_name = event.get("event")
+            event_data = event.get("data") or {}
+            run_id = str(event.get("run_id") or "")
+
+            if event_name == "on_tool_start":
+                if run_id in started_tool_runs:
+                    continue
+                started_tool_runs.add(run_id)
+                tool_name = str(event.get("name") or "工具")
+                tool_input = event_data.get("input", {})
+                yield _format_sse_event(
+                    "tool_start",
+                    {
+                        "tool_name": tool_name,
+                        "arguments": _safe_tool_arguments(tool_input),
+                        "message": f"已选择工具：{tool_name}。",
+                    },
+                )
                 continue
-            assistant_text += text
-            yield _format_sse_event("delta", {"text": text})
+
+            if event_name == "on_tool_end":
+                if run_id in completed_tool_runs:
+                    continue
+                completed_tool_runs.add(run_id)
+                tool_name = str(event.get("name") or "工具")
+                yield _format_sse_event(
+                    "tool_end",
+                    {"tool_name": tool_name, "message": "工具结果已返回，正在整理回答。"},
+                )
+                continue
+
+            if event_name == "on_chat_model_stream":
+                text = _chunk_text(event_data.get("chunk"))
+                if not text:
+                    continue
+                streamed_model_runs.add(run_id)
+                assistant_text += text
+                yield _format_sse_event("delta", {"text": text})
+                continue
+
+            if event_name == "on_chat_model_end" and run_id not in streamed_model_runs:
+                text = _chunk_text(event_data.get("output"))
+                if text and not getattr(event_data.get("output"), "tool_calls", None):
+                    assistant_text += text
+                    yield _format_sse_event("delta", {"text": text})
 
         messages.append(AIMessage(content=assistant_text))
         yield _format_sse_event("done", {"message": {"role": "assistant", "content": assistant_text}})
@@ -130,6 +211,29 @@ async def create_thread() -> ThreadCreatedResponse:
     thread_id = uuid4()
     _thread_messages[thread_id] = []
     return ThreadCreatedResponse(thread_id=thread_id)
+
+
+@router.get("/{thread_id}/messages", response_model=list[MessageResponse])
+async def get_thread_messages(thread_id: UUID) -> list[MessageResponse]:
+    """返回指定会话中可供页面展示的用户和助手消息。
+
+    逻辑规划：
+    1. 根据 thread_id 查找当前进程中的消息列表；不存在时返回 404。
+    2. 只转换 HumanMessage 和 AIMessage，避免内部消息结构泄露给前端。
+    3. 保持原消息列表顺序，返回前端可直接渲染的 role 和 content 字段。
+    """
+
+    messages = _thread_messages.get(thread_id)
+    if messages is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
+
+    return [
+        MessageResponse(role="user", content=message.content)
+        if isinstance(message, HumanMessage)
+        else MessageResponse(role="assistant", content=message.content)
+        for message in messages
+        if isinstance(message, (HumanMessage, AIMessage))
+    ]
 
 
 @router.post("/{thread_id}/chat")
