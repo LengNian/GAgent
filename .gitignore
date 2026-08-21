@@ -6,3 +6,5 @@ __pycache__/
 .venv/
 AGENTS.md
 doc/
+tests/
+scripts/
