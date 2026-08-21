@@ -13,12 +13,3 @@ tools:
       "400": 设备 IP 参数缺失或格式无效。
       "404": 未找到该 IP 对应的设备。
       "5xx": 设备查询服务暂时不可用，请稍后重试。
-    parameters:
-      type: object
-      properties:
-        ip:
-          type: string
-          format: ipv4
-          description: 要查询的设备 IPv4 地址，例如 192.168.1.76。
-      required:
-        - ip

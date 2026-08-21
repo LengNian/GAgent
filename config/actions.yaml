@@ -1,0 +1,36 @@
+object_types:
+  - name: Device
+    description: 物联网系统中的网络或终端设备。
+    properties:
+      ip:
+        type: string
+        format: ipv4
+        description: 设备 IPv4 地址。
+      status:
+        type: string
+        description: 设备当前运行状态。
+
+relations: []
+
+actions:
+  - name: query_device_by_ip
+    description: 根据 IPv4 地址查询设备当前状态、资源使用情况、接口、邻居、温度和近期事件。
+    target_type: Device
+    input_schema:
+      type: object
+      properties:
+        ip:
+          type: string
+          format: ipv4
+          description: 要查询的设备 IPv4 地址，例如 192.168.1.76。
+      required:
+        - ip
+    preconditions:
+      - type: validator
+        name: ipv4
+        field: ip
+    effects:
+      - 返回目标设备的只读状态信息。
+    risk_level: low
+    requires_confirmation: false
+    executor: query_device_by_ip

@@ -1,0 +1,9 @@
+agents:
+  - agent_id: iot_agent
+    description: 负责物联网设备查询和只读状态分析。
+    allowed_actions:
+      - query_device_by_ip
+    prompt: prompts/iot_agent.md
+    runtime:
+      max_steps: 5
+      timeout_seconds: 60

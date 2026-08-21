@@ -8,7 +8,7 @@ from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.settings import Settings, get_settings
-from app.tools import build_enabled_tools
+from app.tools.registry import build_tools_for_agent
 
 
 def _build_model(settings: Settings) -> BaseChatModel:
@@ -34,6 +34,7 @@ def _build_model(settings: Settings) -> BaseChatModel:
 
 def create_agent(
     *,
+    agent_id: str = "iot_agent",
     model: BaseChatModel | None = None,
     settings: Settings | None = None,
 ):
@@ -41,6 +42,7 @@ def create_agent(
 
     Args:
         model: 可选的注入模型；传入后不再根据环境配置创建模型。
+        agent_id: 要构建的 Agent manifest 身份，决定可绑定的 Action allowlist。
         settings: 可选的已校验配置；未传入模型时用于创建默认模型。
     Returns:
         接收 ``MessagesState`` 并返回模型消息的已编译图。
@@ -50,12 +52,12 @@ def create_agent(
     逻辑规划：
     1. 优先使用调用方注入的模型，便于测试和替换模型实现。
     2. 未注入模型时加载缓存配置，并通过 _build_model 创建模型。
-    3. 读取启用工具并绑定给模型，使模型只能选择 YAML 已声明的 Tool。
+    3. 读取 Agent manifest，并只绑定其 allowlist 中的 Ontology Action。
     4. 构建“模型 -> 工具 -> 模型”的条件图；无 Tool 调用时直接结束。
     """
     resolved_settings = settings or get_settings()
     chat_model = model or _build_model(resolved_settings)
-    tools = build_enabled_tools(resolved_settings)
+    tools = build_tools_for_agent(resolved_settings, agent_id)
     
     model_with_tools = chat_model.bind_tools(tools) if tools else chat_model
 

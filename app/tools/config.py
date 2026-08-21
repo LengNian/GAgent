@@ -12,7 +12,7 @@ TOOLS_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "tools.yaml
 
 
 class ToolConfig(BaseModel):
-    """一个由 YAML 驱动的 HTTP Tool 配置。"""
+    """一个由 YAML 驱动的底层执行器配置。"""
 
     name: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     description: str = Field(min_length=1)
@@ -28,18 +28,16 @@ class ToolConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_parameter_schema(self) -> "ToolConfig":
-        """校验 YAML 参数 schema 与请求位置配置的一致性。
+        """校验底层执行器的可选传输参数配置。
 
         逻辑规划：
-        1. 允许 parameters 为空，支持无参数接口。
-        2. 有参数时确认 type 为 object，并要求 properties 和 required 使用标准结构。
-        3. 确认每个请求位置都对应一个已声明参数，避免运行时静默丢参。
-        4. 不限制参数名称或具体业务类型，参数变化只修改 YAML。
+        1. 允许 parameters 为空；业务参数 schema 由 Ontology Action 持有。
+        2. 允许 parameters 存在时按旧格式校验，兼容尚未迁移的执行器配置。
+        3. 传输位置可以独立存在，因为它只描述参数如何发送到外部系统。
+        4. Action Registry 在 Agent manifest 校验时负责确认 Action executor 已启用。
         """
 
         if not self.parameters:
-            if self.argument_locations:
-                raise ValueError("argument_locations cannot be set without parameters")
             return self
 
         if self.parameters.get("type") != "object":
@@ -53,16 +51,6 @@ class ToolConfig(BaseModel):
         missing_fields = set(required) - set(properties)
         if missing_fields:
             raise ValueError(f"required parameters are not declared: {sorted(missing_fields)}")
-        undeclared_locations = set(self.argument_locations) - set(properties)
-        if undeclared_locations:
-            raise ValueError(
-                f"argument locations reference undeclared parameters: {sorted(undeclared_locations)}"
-            )
-        missing_locations = set(properties) - set(self.argument_locations)
-        if missing_locations:
-            raise ValueError(
-                f"parameters must declare an argument location: {sorted(missing_locations)}"
-            )
         return self
 
 
