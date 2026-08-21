@@ -1,4 +1,20 @@
 agents:
+  - agent_id: supervisor
+    description: 负责识别用户任务、提取实体并路由到领域 Agent。
+    allowed_actions: []
+    prompt: prompts/supervisor.md
+    runtime:
+      max_steps: 3
+      timeout_seconds: 30
+
+  - agent_id: conversation_agent
+    description: 负责普通对话、解释和不需要外部 Action 的回答。
+    allowed_actions: []
+    prompt: prompts/conversation_agent.md
+    runtime:
+      max_steps: 3
+      timeout_seconds: 60
+
   - agent_id: iot_agent
     description: 负责物联网设备查询和只读状态分析。
     allowed_actions:

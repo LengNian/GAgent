@@ -3,6 +3,7 @@
 import unittest
 
 from app.agent_manifest import get_agent_manifest, get_agents_config
+from app.prompt_loader import get_agent_prompt
 from app.settings import get_settings
 from app.tools.registry import build_tools_for_agent
 
@@ -36,3 +37,10 @@ class AgentManifestTests(unittest.TestCase):
 
         with self.assertRaises(KeyError):
             get_agent_manifest("unknown_agent")
+
+    def test_each_registered_agent_has_a_prompt(self) -> None:
+        """确认每个 manifest 都能加载共享和专属 Prompt。"""
+
+        for agent in get_agents_config().agents:
+            prompt = get_agent_prompt(agent.agent_id)
+            self.assertIn(agent.agent_id.replace("_", " ").split()[0], prompt.lower())

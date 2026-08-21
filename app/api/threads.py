@@ -1,6 +1,7 @@
 """创建会话和流式返回 Agent 回复的 HTTP 接口。"""
 
 import json
+import logging
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, status
@@ -9,6 +10,9 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent import create_agent
+
+
+logger = logging.getLogger(__name__)
 
 
 class ThreadCreatedResponse(BaseModel):
@@ -188,6 +192,7 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
         messages.append(AIMessage(content=assistant_text))
         yield _format_sse_event("done", {"message": {"role": "assistant", "content": assistant_text}})
     except Exception:
+        logger.exception("Agent execution failed for thread %s", thread_id)
         yield _format_sse_event(
             "error",
             {"code": "agent_execution_failed", "message": "Agent 执行失败，请稍后重试。"},

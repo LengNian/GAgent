@@ -72,6 +72,11 @@ def get_agents_config() -> AgentsConfig:
     # 验证agentid的唯一性
     config = AgentsConfig.model_validate(raw_config)
 
+    from app.prompt_loader import resolve_prompt_path
+
+    for agent in config.agents:
+        resolve_prompt_path(agent.prompt)
+
     # 获得所有可用的action
     action_registry = get_action_registry()
     enabled_executors = {tool.name for tool in get_tools_config().tools if tool.enabled}

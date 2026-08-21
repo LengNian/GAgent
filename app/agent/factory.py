@@ -1,24 +1,39 @@
-"""最小 LangGraph Agent 的构造逻辑。"""
+"""LangGraph Agent 和双 Agent Supervisor 编排图的构造逻辑。"""
 
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from pydantic import BaseModel, Field
 
+from app.prompt_loader import get_agent_prompt
 from app.settings import Settings, get_settings
 from app.tools.registry import build_tools_for_agent
 
 
-def _build_model(settings: Settings) -> BaseChatModel:
-    """根据已校验配置创建聊天模型。
+class RouteDecision(BaseModel):
+    """Supervisor 输出的结构化路由结果。"""
 
-    逻辑规划：
-    1. 从 Settings 读取模型地址、模型名、密钥、温度和超时配置。
-    2. 将敏感密钥只传给模型客户端，不向调用方返回或暴露配置内容。
-    3. 仅在配置了自定义地址时添加 base_url，最后创建并返回 ChatOpenAI 实例。
-    """
+    target_agent: Literal["conversation_agent", "iot_agent"]
+    intent: str = Field(min_length=1)
+    entities: dict[str, Any] = Field(default_factory=dict)
+    confidence: float = Field(ge=0, le=1)
+
+
+class AgentGraphState(MessagesState, total=False):
+    """双 Agent 编排图共享的运行状态。"""
+
+    target_agent: str
+    intent: str
+    entities: dict[str, Any]
+    confidence: float
+
+
+def _build_model(settings: Settings) -> BaseChatModel:
+    """根据已校验配置创建聊天模型。"""
 
     model_kwargs: dict[str, Any] = {
         "api_key": settings.llm_api_key.get_secret_value(),
@@ -28,60 +43,150 @@ def _build_model(settings: Settings) -> BaseChatModel:
     }
     if settings.llm_base_url:
         model_kwargs["base_url"] = settings.llm_base_url
-
     return ChatOpenAI(**model_kwargs)
 
 
-def create_agent(
-    *,
-    agent_id: str = "iot_agent",
-    model: BaseChatModel | None = None,
-    settings: Settings | None = None,
-):
-    """创建只执行一次模型调用的最小 LangGraph Agent。
+def _messages_with_prompt(agent_id: str, state: MessagesState) -> list[Any]:
+    """为指定 Agent 组装系统 Prompt 和当前消息。"""
 
-    Args:
-        model: 可选的注入模型；传入后不再根据环境配置创建模型。
-        agent_id: 要构建的 Agent manifest 身份，决定可绑定的 Action allowlist。
-        settings: 可选的已校验配置；未传入模型时用于创建默认模型。
-    Returns:
-        接收 ``MessagesState`` 并返回模型消息的已编译图。
-    Raises:
-        pydantic.ValidationError: 配置缺失或格式不正确时抛出。
-        Exception: 模型客户端创建失败时抛出。
+    return [SystemMessage(content=get_agent_prompt(agent_id)), *state["messages"]]
+
+
+def _create_domain_agent(
+    *,
+    agent_id: str,
+    model: BaseChatModel,
+    settings: Settings,
+):
+    """创建单个领域 Agent 图，供直接调用或 Supervisor 节点复用。
+
     逻辑规划：
-    1. 优先使用调用方注入的模型，便于测试和替换模型实现。
-    2. 未注入模型时加载缓存配置，并通过 _build_model 创建模型。
-    3. 读取 Agent manifest，并只绑定其 allowlist 中的 Ontology Action。
-    4. 构建“模型 -> 工具 -> 模型”的条件图；无 Tool 调用时直接结束。
+    1. 根据 manifest 裁剪该 Agent 的 Action 工具集合。
+    2. 将 Agent 专属 Prompt 注入模型上下文。
+    3. 构建“领域模型 -> 工具 -> 领域模型”的循环。
+    4. 没有工具调用时结束当前领域图。
     """
-    resolved_settings = settings or get_settings()
-    chat_model = model or _build_model(resolved_settings)
-    tools = build_tools_for_agent(resolved_settings, agent_id)
-    
-    model_with_tools = chat_model.bind_tools(tools) if tools else chat_model
+
+    tools = build_tools_for_agent(settings, agent_id)
+    model_with_tools = model.bind_tools(tools) if tools else model
 
     async def call_model(state: MessagesState) -> dict[str, list[Any]]:
-        """调用模型一次，并将模型回复追加到图状态。
+        """调用领域模型并追加一条模型消息。"""
 
-        逻辑规划：
-        1. 从状态中读取完整消息列表。
-        2. 异步调用已绑定工具的模型，避免阻塞 FastAPI 的流式响应。
-        3. 将单条模型回复包装成 messages 增量返回；若模型产生 Tool 调用，由条件边转入工具节点。
-        """
-
-        response = await model_with_tools.ainvoke(state["messages"])
+        response = await model_with_tools.ainvoke(_messages_with_prompt(agent_id, state))
         return {"messages": [response]}
 
     graph = StateGraph(MessagesState)
     graph.add_node("call_model", call_model)
-    if tools:
-        graph.add_node("tools", ToolNode(tools))
     graph.add_edge(START, "call_model")
     if tools:
+        graph.add_node("tools", ToolNode(tools))
         graph.add_conditional_edges("call_model", tools_condition, {"tools": "tools", END: END})
         graph.add_edge("tools", "call_model")
     else:
         graph.add_edge("call_model", END)
-
     return graph.compile()
+
+
+def _create_orchestrated_agent(
+    *,
+    model: BaseChatModel,
+    settings: Settings,
+):
+    """创建 Supervisor -> Conversation/IoT 的 LangGraph 编排图。
+
+    逻辑规划：
+    1. Supervisor 使用结构化输出识别意图、实体、置信度和目标 Agent。
+    2. 条件边只允许路由到 Conversation Agent 或 IoT Agent。
+    3. Conversation Agent 不绑定外部 Action；IoT Agent 只绑定自己的 allowlist。
+    4. 领域 Agent 完成后结束本轮图执行，最终消息由 API 层流式返回。
+    """
+
+    # GLM 的 OpenAI 兼容接口对 response_format 的支持不完整，会将 JSON Schema
+    # 当作普通文本返回；函数调用能保证路由结果以工具参数形式返回。
+    supervisor_model = model.with_structured_output(RouteDecision, method="function_calling")
+    conversation_graph = _create_domain_agent(
+        agent_id="conversation_agent",
+        model=model,
+        settings=settings,
+    )
+    iot_graph = _create_domain_agent(
+        agent_id="iot_agent",
+        model=model,
+        settings=settings,
+    )
+
+    async def call_supervisor(state: AgentGraphState) -> dict[str, object]:
+        """调用 Supervisor 并保存结构化路由字段，不把路由结果写入对话消息。"""
+
+        decision = await supervisor_model.ainvoke(_messages_with_prompt("supervisor", state))
+        return {
+            "target_agent": decision.target_agent,
+            "intent": decision.intent,
+            "entities": decision.entities,
+            "confidence": decision.confidence,
+        }
+
+    def route_to_agent(state: AgentGraphState) -> str:
+        """根据 Supervisor 结果选择唯一的领域 Agent 节点。"""
+
+        target_agent = state.get("target_agent")
+        if target_agent not in {"conversation_agent", "iot_agent"}:
+            raise ValueError(f"Supervisor returned unsupported target agent: {target_agent}")
+        return target_agent
+
+    async def call_conversation(state: AgentGraphState) -> dict[str, list[Any]]:
+        """执行 Conversation Agent 子图。"""
+
+        result = await conversation_graph.ainvoke({"messages": state["messages"]})
+        return {"messages": result["messages"][-1:]}
+
+    async def call_iot(state: AgentGraphState) -> dict[str, list[Any]]:
+        """执行 IoT Agent 子图。"""
+
+        result = await iot_graph.ainvoke({"messages": state["messages"]})
+        return {"messages": result["messages"][-1:]}
+
+    graph = StateGraph(AgentGraphState)
+    graph.add_node("supervisor", call_supervisor)
+    graph.add_node("conversation_agent", call_conversation)
+    graph.add_node("iot_agent", call_iot)
+    graph.add_edge(START, "supervisor")
+    graph.add_conditional_edges(
+        "supervisor",
+        route_to_agent,
+        {
+            "conversation_agent": "conversation_agent",
+            "iot_agent": "iot_agent",
+        },
+    )
+    graph.add_edge("conversation_agent", END)
+    graph.add_edge("iot_agent", END)
+    return graph.compile()
+
+
+def create_agent(
+    *,
+    agent_id: str | None = None,
+    model: BaseChatModel | None = None,
+    settings: Settings | None = None,
+):
+    """创建编排图或指定的单领域 Agent 图。
+
+    Args:
+        agent_id: 传入时创建指定领域 Agent；不传入时创建 Supervisor 编排图。
+        model: 可选的注入模型，便于测试和替换模型实现。
+        settings: 可选的已校验配置；未传入时加载默认配置。
+    Returns:
+        已编译的 LangGraph 图。
+    """
+
+    resolved_settings = settings or get_settings()
+    chat_model = model or _build_model(resolved_settings)
+    if agent_id:
+        return _create_domain_agent(
+            agent_id=agent_id,
+            model=chat_model,
+            settings=resolved_settings,
+        )
+    return _create_orchestrated_agent(model=chat_model, settings=resolved_settings)
