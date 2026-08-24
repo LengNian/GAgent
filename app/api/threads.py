@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent import create_agent
+from app.agent.factory import AgentExecutionLimitError
 from app.agent_manifest import get_agents_config
 
 
@@ -163,6 +164,7 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
     try:
         agent = create_agent()
         async for event in agent.astream_events({"messages": messages}, version="v2"):
+
             event_name = event.get("event")
             event_data = event.get("data") or {}
             run_id = str(event.get("run_id") or "")
@@ -174,6 +176,7 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
                     continue
                 decision_summary = output.get("decision_summary")
                 target_agent = output.get("target_agent")
+
                 if isinstance(decision_summary, str) and decision_summary:
                     yield _format_sse_event(
                         "agent_progress",
@@ -254,6 +257,22 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
 
         messages.append(AIMessage(content=assistant_text))
         yield _format_sse_event("done", {"message": {"role": "assistant", "content": assistant_text}})
+    except AgentExecutionLimitError as error:
+        logger.warning(
+            "Agent execution limit reached for thread %s: agent=%s limit=%s value=%s",
+            thread_id,
+            error.agent_id,
+            error.limit_type,
+            error.limit_value,
+        )
+        if error.limit_type == "timeout_seconds":
+            message = f"{error.agent_id} 执行超时，已安全停止，请稍后重试。"
+        else:
+            message = f"{error.agent_id} 执行步骤超过限制，已安全停止。"
+        yield _format_sse_event(
+            "error",
+            {"code": "agent_execution_limit", "message": message},
+        )
     except Exception:
         logger.exception("Agent execution failed for thread %s", thread_id)
         yield _format_sse_event(

@@ -4,7 +4,7 @@ agents:
     allowed_actions: []
     prompt: prompts/supervisor.md
     runtime:
-      max_steps: 3
+      max_steps: 5
       timeout_seconds: 30
 
   - agent_id: conversation_agent
@@ -13,7 +13,7 @@ agents:
     prompt: prompts/conversation_agent.md
     runtime:
       max_steps: 3
-      timeout_seconds: 60
+      timeout_seconds: 30
 
   - agent_id: iot_agent
     description: 负责物联网设备查询和只读状态分析。
@@ -22,4 +22,4 @@ agents:
     prompt: prompts/iot_agent.md
     runtime:
       max_steps: 5
-      timeout_seconds: 60
+      timeout_seconds: 0.1

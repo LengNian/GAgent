@@ -1,15 +1,18 @@
 """LangGraph Agent 和双 Agent Supervisor 编排图的构造逻辑。"""
 
+import asyncio
 from typing import Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel, Field
 
 from app.prompt_loader import get_agent_prompt
+from app.agent_manifest import get_agent_manifest
 from app.settings import Settings, get_settings
 from app.tools.registry import build_tools_for_agent
 
@@ -34,6 +37,16 @@ class AgentGraphState(MessagesState, total=False):
     decision_summary: str
 
 
+class AgentExecutionLimitError(Exception):
+    """Agent 执行超过 manifest 声明的时间或步骤限制。"""
+
+    def __init__(self, agent_id: str, limit_type: str, limit_value: float | int) -> None:
+        self.agent_id = agent_id
+        self.limit_type = limit_type
+        self.limit_value = limit_value
+        super().__init__(f"Agent {agent_id} exceeded {limit_type}: {limit_value}")
+
+
 def _build_model(settings: Settings) -> BaseChatModel:
     """根据已校验配置创建聊天模型。"""
 
@@ -52,6 +65,41 @@ def _messages_with_prompt(agent_id: str, state: MessagesState) -> list[Any]:
     """为指定 Agent 组装系统 Prompt 和当前消息。"""
 
     return [SystemMessage(content=get_agent_prompt(agent_id)), *state["messages"]]
+
+
+async def _invoke_domain_graph(
+    *,
+    agent_id: str,
+    graph: Any,
+    messages: list[Any],
+) -> dict[str, Any]:
+    """按 Agent manifest 限制执行领域子图。
+
+    逻辑规划：
+    1. 读取 Agent manifest 中的总超时与最大图步骤数。
+    2. 在超时范围内调用领域图，并将最大步骤数传给 LangGraph。
+    3. 将框架超步数和 asyncio 超时转换为稳定的业务异常。
+    """
+
+    runtime = get_agent_manifest(agent_id).runtime
+    try:
+        async with asyncio.timeout(runtime.timeout_seconds):
+            return await graph.ainvoke(
+                {"messages": messages},
+                config={"recursion_limit": runtime.max_steps},
+            )
+    except TimeoutError as error:
+        raise AgentExecutionLimitError(
+            agent_id,
+            "timeout_seconds",
+            runtime.timeout_seconds,
+        ) from error
+    except GraphRecursionError as error:
+        raise AgentExecutionLimitError(
+            agent_id,
+            "max_steps",
+            runtime.max_steps,
+        ) from error
 
 
 def _create_domain_agent(
@@ -121,7 +169,16 @@ def _create_orchestrated_agent(
     async def call_supervisor(state: AgentGraphState) -> dict[str, object]:
         """调用 Supervisor 并保存结构化路由字段，不把路由结果写入对话消息。"""
 
-        decision = await supervisor_model.ainvoke(_messages_with_prompt("supervisor", state))
+        runtime = get_agent_manifest("supervisor").runtime
+        try:
+            async with asyncio.timeout(runtime.timeout_seconds):
+                decision = await supervisor_model.ainvoke(_messages_with_prompt("supervisor", state))
+        except TimeoutError as error:
+            raise AgentExecutionLimitError(
+                "supervisor",
+                "timeout_seconds",
+                runtime.timeout_seconds,
+            ) from error
         return {
             "target_agent": decision.target_agent,
             "intent": decision.intent,
@@ -141,13 +198,21 @@ def _create_orchestrated_agent(
     async def call_conversation(state: AgentGraphState) -> dict[str, list[Any]]:
         """执行 Conversation Agent 子图。"""
 
-        result = await conversation_graph.ainvoke({"messages": state["messages"]})
+        result = await _invoke_domain_graph(
+            agent_id="conversation_agent",
+            graph=conversation_graph,
+            messages=state["messages"],
+        )
         return {"messages": result["messages"][-1:]}
 
     async def call_iot(state: AgentGraphState) -> dict[str, list[Any]]:
         """执行 IoT Agent 子图。"""
 
-        result = await iot_graph.ainvoke({"messages": state["messages"]})
+        result = await _invoke_domain_graph(
+            agent_id="iot_agent",
+            graph=iot_graph,
+            messages=state["messages"],
+        )
         return {"messages": result["messages"][-1:]}
 
     graph = StateGraph(AgentGraphState)
