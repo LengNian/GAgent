@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.action_gateway import ActionGateway
+from app.tools.http_client import ToolExecutionError
 
 
 class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
@@ -51,8 +52,34 @@ class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertFalse(result["ok"])
+        self.assertFalse(result["retryable"])
+        self.assertEqual(result["error_type"], "gateway_validation")
         self.assertIn("valid IPv4", result["error"])
         request_mock.assert_not_awaited()
+
+    async def test_transient_executor_error_is_marked_retryable(self) -> None:
+        """网络类执行器错误必须标记为可重试，供后续编排使用。"""
+
+        request_mock = AsyncMock(
+            side_effect=ToolExecutionError(
+                "设备查询服务暂时不可用",
+                retryable=True,
+                error_type="network",
+            )
+        )
+        with patch("app.action_gateway.request_tool_json", request_mock):
+            gateway = ActionGateway(agent_id="iot_agent", settings=self.settings)
+            result = json.loads(
+                await gateway.execute(
+                    "query_device_by_ip",
+                    {"ip": "192.168.1.76"},
+                )
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["retryable"])
+        self.assertEqual(result["error_type"], "network")
+        self.assertEqual(result["message"], "设备查询服务暂时不可用")
 
     async def test_unknown_action_is_rejected(self) -> None:
         """未注册 Action 必须被 Gateway 拒绝且不能调用 executor。"""

@@ -1,10 +1,11 @@
 """LangGraph Agent 和双 Agent Supervisor 编排图的构造逻辑。"""
 
 import asyncio
+import json
 from typing import Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import SystemMessage
+from langchain_core.messages import AIMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -37,6 +38,12 @@ class AgentGraphState(MessagesState, total=False):
     decision_summary: str
 
 
+class DomainGraphState(MessagesState, total=False):
+    """领域 Agent 图状态，额外保存确定性的降级结果。"""
+
+    fallback_message: str
+
+
 class AgentExecutionLimitError(Exception):
     """Agent 执行超过 manifest 声明的时间或步骤限制。"""
 
@@ -65,6 +72,28 @@ def _messages_with_prompt(agent_id: str, state: MessagesState) -> list[Any]:
     """为指定 Agent 组装系统 Prompt 和当前消息。"""
 
     return [SystemMessage(content=get_agent_prompt(agent_id)), *state["messages"]]
+
+
+def _fallback_message_for_tool_result(content: object, agent_id: str) -> str | None:
+    """按 Agent、Action 和错误类型生成安全降级文案。"""
+
+    if not isinstance(content, str):
+        return None
+    try:
+        result = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(result, dict) or result.get("ok") is not False:
+        return None
+
+    action_name = result.get("action_name")
+    error_type = result.get("error_type")
+
+    if action_name == "query_device_by_ip":
+        return "设备查询未完成，外部设备服务暂时不可用，请稍后重试。"
+    if error_type in {"network", "timeout", "server"}:
+        return f"{agent_id} 依赖的外部服务暂时不可用，请稍后重试。"
+    return f"{agent_id} 未能完成当前操作，请检查输入后重试。"
 
 
 async def _invoke_domain_graph(
@@ -126,13 +155,51 @@ def _create_domain_agent(
         response = await model_with_tools.ainvoke(_messages_with_prompt(agent_id, state))
         return {"messages": [response]}
 
-    graph = StateGraph(MessagesState)
+    async def inspect_tool_result(state: DomainGraphState) -> dict[str, str]:
+        """检查最近一次工具结果，失败时准备进入 fallback。"""
+
+        if not state["messages"]:
+            return {}
+        fallback_message = _fallback_message_for_tool_result(
+            state["messages"][-1].content,
+            agent_id,
+        )
+        return {"fallback_message": fallback_message} if fallback_message else {}
+
+    async def call_fallback(state: DomainGraphState) -> dict[str, list[Any]]:
+        """返回不编造业务数据的安全降级回答。"""
+
+        return {
+            "messages": [
+                AIMessage(
+                    content=state.get(
+                        "fallback_message",
+                        "当前请求未能完成，请稍后重试。",
+                    )
+                )
+            ]
+        }
+
+    def route_after_tool(state: DomainGraphState) -> str:
+        """根据工具结果选择继续生成或进入 fallback。"""
+
+        return "fallback" if state.get("fallback_message") else "call_model"
+
+    graph = StateGraph(DomainGraphState)
     graph.add_node("call_model", call_model)
     graph.add_edge(START, "call_model")
     if tools:
         graph.add_node("tools", ToolNode(tools))
+        graph.add_node("inspect_tool_result", inspect_tool_result)
+        graph.add_node("fallback", call_fallback)
         graph.add_conditional_edges("call_model", tools_condition, {"tools": "tools", END: END})
-        graph.add_edge("tools", "call_model")
+        graph.add_edge("tools", "inspect_tool_result")
+        graph.add_conditional_edges(
+            "inspect_tool_result",
+            route_after_tool,
+            {"call_model": "call_model", "fallback": "fallback"},
+        )
+        graph.add_edge("fallback", END)
     else:
         graph.add_edge("call_model", END)
     return graph.compile()

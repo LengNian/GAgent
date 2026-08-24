@@ -13,6 +13,13 @@ from .config import ToolConfig
 class ToolExecutionError(Exception):
     """可安全展示给 Agent 和用户的工具执行错误。"""
 
+    def __init__(self, message: str, *, retryable: bool, error_type: str) -> None:
+        """保存错误分类，供 Gateway 和后续编排逻辑判断。"""
+
+        self.retryable = retryable
+        self.error_type = error_type
+        super().__init__(message)
+
 
 async def request_tool_json(
     tool_config: ToolConfig,
@@ -37,7 +44,11 @@ async def request_tool_json(
     try:
         endpoint = tool_config.endpoint.format(**path_arguments)
     except KeyError as error:
-        raise ToolExecutionError("工具路径缺少必要参数配置。") from error
+        raise ToolExecutionError(
+            "工具路径缺少必要参数配置。",
+            retryable=False,
+            error_type="configuration",
+        ) from error
 
     query_parameters = {
         name: value
@@ -65,28 +76,59 @@ async def request_tool_json(
                 )
             except httpx.RequestError as error:
                 if attempt == max_attempts - 1:
+                    error_type = "timeout" if isinstance(error, httpx.TimeoutException) else "network"
                     raise ToolExecutionError(
-                        tool_config.error_messages.get("network", "服务暂时不可用，请稍后重试。")
+                        tool_config.error_messages.get("network", "服务暂时不可用，请稍后重试。"),
+                        retryable=True,
+                        error_type=error_type,
                     ) from error
             else:
                 if response.status_code == 200:
                     try:
                         response_data = response.json()
                     except ValueError as error:
-                        raise ToolExecutionError("设备查询服务返回了无法解析的数据。") from error
+                        raise ToolExecutionError(
+                            "设备查询服务返回了无法解析的数据。",
+                            retryable=False,
+                            error_type="invalid_response",
+                        ) from error
                     if not isinstance(response_data, (dict, list)):
-                        raise ToolExecutionError("设备查询服务返回了无效数据。")
+                        raise ToolExecutionError(
+                            "设备查询服务返回了无效数据。",
+                            retryable=False,
+                            error_type="invalid_response",
+                        )
                     return response_data
                 if response.status_code == 400:
-                    raise ToolExecutionError(tool_config.error_messages.get("400", "请求参数无效。"))
+                    raise ToolExecutionError(
+                        tool_config.error_messages.get("400", "请求参数无效。"),
+                        retryable=False,
+                        error_type="bad_request",
+                    )
                 if response.status_code == 404:
-                    raise ToolExecutionError(tool_config.error_messages.get("404", "请求资源不存在。"))
+                    raise ToolExecutionError(
+                        tool_config.error_messages.get("404", "请求资源不存在。"),
+                        retryable=False,
+                        error_type="not_found",
+                    )
                 if response.status_code < 500:
                     message = tool_config.error_messages.get(str(response.status_code), "请求失败。")
-                    raise ToolExecutionError(message)
+                    raise ToolExecutionError(
+                        message,
+                        retryable=False,
+                        error_type=f"http_{response.status_code}",
+                    )
                 if attempt == max_attempts - 1:
-                    raise ToolExecutionError(tool_config.error_messages.get("5xx", "服务暂时不可用，请稍后重试。"))
+                    raise ToolExecutionError(
+                        tool_config.error_messages.get("5xx", "服务暂时不可用，请稍后重试。"),
+                        retryable=True,
+                        error_type="server",
+                    )
 
             await asyncio.sleep(tool_config.retry_delay_seconds * (2**attempt))
 
-    raise ToolExecutionError(tool_config.error_messages.get("5xx", "服务暂时不可用，请稍后重试。"))
+    raise ToolExecutionError(
+        tool_config.error_messages.get("5xx", "服务暂时不可用，请稍后重试。"),
+        retryable=True,
+        error_type="server",
+    )

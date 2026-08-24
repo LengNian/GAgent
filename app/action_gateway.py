@@ -68,9 +68,31 @@ class ActionGateway:
                 self.settings,
             )
         except ActionGatewayError as error:
-            return json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "ok": False,
+                    "agent_id": self.agent_id,
+                    "action_name": action_name,
+                    "retryable": False,
+                    "error_type": "gateway_validation",
+                    "message": str(error),
+                    "error": str(error),
+                },
+                ensure_ascii=False,
+            )
         except ToolExecutionError as error:
-            return json.dumps({"ok": False, "error": str(error)}, ensure_ascii=False)
+            return json.dumps(
+                {
+                    "ok": False,
+                    "agent_id": self.agent_id,
+                    "action_name": action_name,
+                    "retryable": error.retryable,
+                    "error_type": error.error_type,
+                    "message": str(error),
+                    "error": str(error),
+                },
+                ensure_ascii=False,
+            )
         return json.dumps(response_data, ensure_ascii=False)
 
     def _authorize(self, action: ActionConfig) -> None:

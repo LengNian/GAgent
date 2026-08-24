@@ -5,7 +5,7 @@ agents:
     prompt: prompts/supervisor.md
     runtime:
       max_steps: 5
-      timeout_seconds: 30
+      timeout_seconds: 60
 
   - agent_id: conversation_agent
     description: 负责普通对话、解释和不需要外部 Action 的回答。
@@ -22,4 +22,4 @@ agents:
     prompt: prompts/iot_agent.md
     runtime:
       max_steps: 5
-      timeout_seconds: 0.1
+      timeout_seconds: 30
