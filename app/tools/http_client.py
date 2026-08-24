@@ -1,13 +1,18 @@
 """执行已声明的只读 NMS HTTP 工具。"""
 
 import asyncio
+import logging
 from typing import Any
 
 import httpx
 
+from app.observability import log_event
 from app.settings import Settings
 
 from .config import ToolConfig
+
+
+logger = logging.getLogger(__name__)
 
 
 class ToolExecutionError(Exception):
@@ -67,6 +72,15 @@ async def request_tool_json(
 
     async with httpx.AsyncClient(base_url=settings.nms_api_base_url, timeout=timeout) as client:
         for attempt in range(max_attempts):
+            log_event(
+                logger,
+                logging.INFO,
+                "http_attempt_started",
+                method=tool_config.method,
+                endpoint=endpoint,
+                attempt=attempt + 1,
+                max_attempts=max_attempts,
+            )
             try:
                 response = await client.request(
                     method=tool_config.method,
@@ -82,6 +96,17 @@ async def request_tool_json(
                         retryable=True,
                         error_type=error_type,
                     ) from error
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "http_attempt_retry_scheduled",
+                    method=tool_config.method,
+                    endpoint=endpoint,
+                    attempt=attempt + 1,
+                    next_attempt=attempt + 2,
+                    delay_seconds=tool_config.retry_delay_seconds * (2**attempt),
+                    error_type="timeout" if isinstance(error, httpx.TimeoutException) else "network",
+                )
             else:
                 if response.status_code == 200:
                     try:
@@ -124,6 +149,18 @@ async def request_tool_json(
                         retryable=True,
                         error_type="server",
                     )
+                log_event(
+                    logger,
+                    logging.WARNING,
+                    "http_attempt_retry_scheduled",
+                    method=tool_config.method,
+                    endpoint=endpoint,
+                    attempt=attempt + 1,
+                    next_attempt=attempt + 2,
+                    delay_seconds=tool_config.retry_delay_seconds * (2**attempt),
+                    error_type="server",
+                    status_code=response.status_code,
+                )
 
             await asyncio.sleep(tool_config.retry_delay_seconds * (2**attempt))
 

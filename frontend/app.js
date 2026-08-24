@@ -317,7 +317,11 @@
     }
     if (event.name === "delta") return content + (event.data.text || "");
     if (event.name === "done") return (event.data.message && event.data.message.content) || content;
-    if (event.name === "error") throw new Error(event.data.message || "Agent 执行失败。");
+    if (event.name === "error") {
+      var errorMessage = event.data.message || "Agent 执行失败。";
+      if (event.data.trace_id) errorMessage += "（trace_id: " + event.data.trace_id + "）";
+      throw new Error(errorMessage);
+    }
     return content;
   }
 
@@ -329,12 +333,18 @@
     var decoder = new TextDecoder();
     var buffer = "";
     var content = "";
+    var sawTerminalEvent = false;
     function next() {
       // [逻辑规划] 读取一块数据；未结束则递归继续，结束则处理剩余缓冲并提交最终助手消息。
       return reader.read().then(function (chunk) {
         if (chunk.done) {
           buffer += decoder.decode();
-          if (buffer.trim()) content = applyEvent(parseEvent(buffer), content);
+          if (buffer.trim()) {
+            var finalEvent = parseEvent(buffer);
+            if (finalEvent && (finalEvent.name === "done" || finalEvent.name === "error")) sawTerminalEvent = true;
+            content = applyEvent(finalEvent, content);
+          }
+          if (!sawTerminalEvent) throw new Error("流式响应提前结束，请重试。");
           setAssistant(content, false, false);
           return;
         }
@@ -343,6 +353,7 @@
         buffer = blocks.pop();
         blocks.forEach(function (block) {
           var event = parseEvent(block);
+          if (event && (event.name === "done" || event.name === "error")) sawTerminalEvent = true;
           content = applyEvent(event, content);
           if (event && (event.name === "delta" || event.name === "done")) setAssistant(content, event.name === "delta", false);
         });

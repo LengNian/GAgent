@@ -4,13 +4,18 @@
 
 import ipaddress
 import json
+import logging
 from typing import Any
 
 from app.agent_manifest import get_agent_manifest
 from app.ontology import ActionConfig, get_action_registry
 from app.settings import Settings
+from app.observability import log_event
 from app.tools.config import get_tools_config
 from app.tools.http_client import ToolExecutionError, request_tool_json
+
+
+logger = logging.getLogger(__name__)
 
 
 class ActionGatewayError(Exception):
@@ -49,6 +54,13 @@ class ActionGateway:
         """
 
         try:
+            log_event(
+                logger,
+                logging.INFO,
+                "action_started",
+                agent_id=self.agent_id,
+                action_name=action_name,
+            )
 
             try:
                 action = self.action_registry.get(action_name)
@@ -68,6 +80,14 @@ class ActionGateway:
                 self.settings,
             )
         except ActionGatewayError as error:
+            log_event(
+                logger,
+                logging.WARNING,
+                "action_rejected",
+                agent_id=self.agent_id,
+                action_name=action_name,
+                error_type="gateway_validation",
+            )
             return json.dumps(
                 {
                     "ok": False,
@@ -81,6 +101,15 @@ class ActionGateway:
                 ensure_ascii=False,
             )
         except ToolExecutionError as error:
+            log_event(
+                logger,
+                logging.WARNING,
+                "action_failed",
+                agent_id=self.agent_id,
+                action_name=action_name,
+                error_type=error.error_type,
+                retryable=error.retryable,
+            )
             return json.dumps(
                 {
                     "ok": False,
@@ -93,6 +122,13 @@ class ActionGateway:
                 },
                 ensure_ascii=False,
             )
+        log_event(
+            logger,
+            logging.INFO,
+            "action_succeeded",
+            agent_id=self.agent_id,
+            action_name=action_name,
+        )
         return json.dumps(response_data, ensure_ascii=False)
 
     def _authorize(self, action: ActionConfig) -> None:

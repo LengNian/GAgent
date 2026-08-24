@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.agent import create_agent
 from app.agent.factory import AgentExecutionLimitError
 from app.agent_manifest import get_agents_config
+from app.observability import log_event, reset_trace_id, set_trace_id
 
 
 logger = logging.getLogger(__name__)
@@ -140,7 +141,7 @@ def _agent_display_name(agent_id: str) -> str:
     return display_names.get(agent_id, agent_id)
 
 
-async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
+async def _stream_reply(thread_id: UUID, messages: list[BaseMessage], trace_id: str):
     """执行 Agent 并将回复转换为 SSE 流。
 
     Args:
@@ -156,12 +157,14 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
     5. 正常完成后追加助手消息并发送 done；任意执行异常转换为统一 error 事件。
     6. 无论成功或失败都释放会话运行标记，避免会话永久处于执行状态。
     """
+    trace_token = set_trace_id(trace_id)
     assistant_text = ""
     started_tool_runs: set[str] = set()
     completed_tool_runs: set[str] = set()
     streamed_model_runs: set[str] = set()
 
     try:
+        log_event(logger, logging.INFO, "agent_request_started", thread_id=str(thread_id))
         agent = create_agent()
         async for event in agent.astream_events({"messages": messages}, version="v2"):
 
@@ -178,6 +181,13 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
                 target_agent = output.get("target_agent")
 
                 if isinstance(decision_summary, str) and decision_summary:
+                    log_event(
+                        logger,
+                        logging.INFO,
+                        "supervisor_route_decided",
+                        thread_id=str(thread_id),
+                        target_agent=target_agent,
+                    )
                     yield _format_sse_event(
                         "agent_progress",
                         {"message": f"Supervisor：{decision_summary}"},
@@ -215,6 +225,15 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
                 tool_name = str(event.get("name") or "工具")
                 tool_input = event_data.get("input", {})
                 agent_name = _tool_agent_name(tool_name)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "tool_started",
+                    thread_id=str(thread_id),
+                    tool_name=tool_name,
+                    agent_name=agent_name,
+                    arguments=_safe_tool_arguments(tool_input),
+                )
                 yield _format_sse_event(
                     "tool_start",
                     {
@@ -231,6 +250,14 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
                 completed_tool_runs.add(run_id)
                 tool_name = str(event.get("name") or "工具")
                 agent_name = _tool_agent_name(tool_name)
+                log_event(
+                    logger,
+                    logging.INFO,
+                    "tool_finished",
+                    thread_id=str(thread_id),
+                    tool_name=tool_name,
+                    agent_name=agent_name,
+                )
                 yield _format_sse_event(
                     "tool_end",
                     {
@@ -256,14 +283,29 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
                     yield _format_sse_event("delta", {"text": text})
 
         messages.append(AIMessage(content=assistant_text))
-        yield _format_sse_event("done", {"message": {"role": "assistant", "content": assistant_text}})
+        log_event(
+            logger,
+            logging.INFO,
+            "agent_request_completed",
+            thread_id=str(thread_id),
+            response_length=len(assistant_text),
+        )
+        yield _format_sse_event(
+            "done",
+            {
+                "trace_id": trace_id,
+                "message": {"role": "assistant", "content": assistant_text},
+            },
+        )
     except AgentExecutionLimitError as error:
-        logger.warning(
-            "Agent execution limit reached for thread %s: agent=%s limit=%s value=%s",
-            thread_id,
-            error.agent_id,
-            error.limit_type,
-            error.limit_value,
+        log_event(
+            logger,
+            logging.WARNING,
+            "agent_execution_limit_reached",
+            thread_id=str(thread_id),
+            agent_id=error.agent_id,
+            limit_type=error.limit_type,
+            limit_value=error.limit_value,
         )
         if error.limit_type == "timeout_seconds":
             message = f"{error.agent_id} 执行超时，已安全停止，请稍后重试。"
@@ -271,16 +313,22 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
             message = f"{error.agent_id} 执行步骤超过限制，已安全停止。"
         yield _format_sse_event(
             "error",
-            {"code": "agent_execution_limit", "message": message},
+            {"code": "agent_execution_limit", "message": message, "trace_id": trace_id},
         )
     except Exception:
+        log_event(logger, logging.ERROR, "agent_request_failed", thread_id=str(thread_id))
         logger.exception("Agent execution failed for thread %s", thread_id)
         yield _format_sse_event(
             "error",
-            {"code": "agent_execution_failed", "message": "Agent 执行失败，请稍后重试。"},
+            {
+                "code": "agent_execution_failed",
+                "message": "Agent 执行失败，请稍后重试。",
+                "trace_id": trace_id,
+            },
         )
     finally:
         _active_threads.discard(thread_id)
+        reset_trace_id(trace_token)
 
 
 @router.post("", response_model=ThreadCreatedResponse, status_code=status.HTTP_201_CREATED)
@@ -349,8 +397,13 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
 
     _active_threads.add(thread_id)
     messages.append(HumanMessage(content=request.content))
+    trace_id = str(uuid4())
     return StreamingResponse(
-        _stream_reply(thread_id, messages),
+        _stream_reply(thread_id, messages, trace_id),
         media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Trace-Id": trace_id,
+        },
     )

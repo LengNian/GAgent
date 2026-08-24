@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.api.threads import router as threads_router
+from app.observability import configure_logging
 from app.startup import validate_startup_configuration
 
 
@@ -24,6 +25,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     3. 当前没有需要在关闭阶段释放的资源，直接结束生命周期。
     """
 
+    configure_logging()
     validate_startup_configuration()
     yield
 
