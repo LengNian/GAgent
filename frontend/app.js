@@ -2,6 +2,8 @@
   "use strict";
   var API_BASE = (window.NMS_AGENT_CONFIG && window.NMS_AGENT_CONFIG.apiBase) || "";
   var STORAGE_KEY = "nms_agent_thread_id";
+  var HISTORY_STORAGE_KEY = "nms_agent_thread_history";
+  var SIDEBAR_STORAGE_KEY = "nms_agent_sidebar_collapsed";
   var MAX_LENGTH = 4000;
   
   var threadState = {
@@ -10,12 +12,14 @@
     busy: false, 
     creating: false, 
     failedContent: "",
-    executionSteps: []
+    executionSteps: [],
+    history: [],
+    sidebarCollapsed: false
   };
 
   var elements = {};
 
-  ["newThread", "clearThread", "statusDot", "sessionStatus", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote"].forEach(function (id) { elements[id] = document.getElementById(id); });
+  ["appShell", "sidebar", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote"].forEach(function (id) { elements[id] = document.getElementById(id); });
 
   // [逻辑规划] 去掉配置地址末尾的斜杠，再拼接接口路径，兼容同源和独立前端部署。
   function apiUrl(path) { return API_BASE.replace(/\/$/, "") + path; }
@@ -29,6 +33,100 @@
       console.debug("Unable to update the stored thread ID.", error);
     }
   }
+
+
+  function loadStoredHistory() {
+    // [逻辑规划] 读取浏览器中的会话摘要；数据库接入后只替换这里的数据来源，不改变侧栏渲染协议。
+    try {
+      var stored = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
+      if (!Array.isArray(stored)) return [];
+      return stored.filter(function (item) {
+        return item && typeof item.id === "string" && typeof item.title === "string";
+      }).slice(0, 20);
+    } catch (error) {
+      console.debug("Unable to read the stored thread history.", error);
+      return [];
+    }
+  }
+
+
+  function saveHistory() {
+    // [逻辑规划] 本地保存仅用于数据库接入前的演示和刷新恢复，写入失败不影响当前对话。
+    try {
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(threadState.history.slice(0, 20)));
+    } catch (error) {
+      console.debug("Unable to update the stored thread history.", error);
+    }
+  }
+
+
+  function renderHistory() {
+    // [逻辑规划] 用稳定的按钮元素呈现会话摘要，当前会话只通过 active 状态标识，不复制消息内容。
+    elements.threadHistory.innerHTML = "";
+    elements.historyEmpty.classList.toggle("hidden", threadState.history.length > 0);
+    threadState.history.forEach(function (item) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "thread-history-item" + (item.id === threadState.threadId ? " active" : "");
+      button.title = item.title;
+      var dot = document.createElement("i");
+      dot.setAttribute("aria-hidden", "true");
+      var title = document.createElement("span");
+      title.textContent = item.title;
+      button.appendChild(dot);
+      button.appendChild(title);
+      button.addEventListener("click", function () {
+        if (item.id !== threadState.threadId) loadThread(item.id);
+        setSidebarOpen(false);
+      });
+      elements.threadHistory.appendChild(button);
+    });
+  }
+
+
+  function rememberThread(threadId, title) {
+    // [逻辑规划] 新会话置顶；已有会话仅在仍是默认标题时更新，避免后续问题覆盖原始标题。
+    if (!threadId) return;
+    var existing = threadState.history.find(function (item) { return item.id === threadId; });
+    if (existing) {
+      if (title && existing.title === "新对话") existing.title = title;
+      threadState.history = [existing].concat(threadState.history.filter(function (item) { return item.id !== threadId; }));
+    } else {
+      threadState.history.unshift({ id: threadId, title: title || "新对话" });
+    }
+    threadState.history = threadState.history.slice(0, 20);
+    saveHistory();
+    renderHistory();
+  }
+
+
+  function removeThreadFromHistory(threadId) {
+    threadState.history = threadState.history.filter(function (item) { return item.id !== threadId; });
+    saveHistory();
+    renderHistory();
+  }
+
+
+  function setSidebarCollapsed(collapsed) {
+    // [逻辑规划] 桌面端保存折叠偏好；移动端使用独立的打开状态，不改变桌面布局宽度。
+    threadState.sidebarCollapsed = Boolean(collapsed);
+    elements.appShell.classList.toggle("sidebar-collapsed", threadState.sidebarCollapsed);
+    elements.toggleSidebar.querySelector("span").textContent = threadState.sidebarCollapsed ? "›" : "‹";
+    elements.toggleSidebar.setAttribute("aria-expanded", String(!threadState.sidebarCollapsed));
+    elements.toggleSidebar.setAttribute("title", threadState.sidebarCollapsed ? "展开侧栏" : "收起侧栏");
+    elements.toggleSidebar.setAttribute("aria-label", threadState.sidebarCollapsed ? "展开侧栏" : "收起侧栏");
+    try {
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, threadState.sidebarCollapsed ? "1" : "0");
+    } catch (error) {
+      console.debug("Unable to store the sidebar preference.", error);
+    }
+  }
+
+
+  function setSidebarOpen(open) {
+    // [逻辑规划] 移动端以抽屉状态打开或关闭侧栏，桌面端不改变布局折叠状态。
+    elements.appShell.classList.toggle("sidebar-open", Boolean(open));
+  }
   
   
   function setCurrentThread(threadId) {
@@ -38,6 +136,7 @@
     var url = new URL(window.location.href);
     threadState.threadId ? url.searchParams.set("thread_id", threadState.threadId) : url.searchParams.delete("thread_id");
     window.history.replaceState({}, "", url);
+    renderHistory();
     updateUi();
   }
 
@@ -238,9 +337,11 @@
         if (!data.thread_id) throw new Error("服务未返回有效的 thread_id。");
         threadState.messages = [];
         setCurrentThread(data.thread_id);
+        rememberThread(data.thread_id, "新对话");
         updateHeader();
         render(false);
         setConnection("已连接", "会话已准备就绪。", "active");
+        setSidebarOpen(false);
         elements.input.focus();
       })
       .catch(function (error) { showError(error.message || "创建会话失败，请稍后重试。"); })
@@ -258,6 +359,7 @@
     fetch(apiUrl("/api/threads/" + encodeURIComponent(threadId) + "/messages"))
       .then(function (response) {
         if (response.status === 404 || response.status === 405) {
+          removeThreadFromHistory(threadId);
           setCurrentThread(null);
           threadState.messages = [];
           clearError();
@@ -272,6 +374,8 @@
       .then(function (data) {
         if (data === null) return;
         threadState.messages = Array.isArray(data) ? data : (data.messages || []);
+        var firstUserMessage = threadState.messages.find(function (message) { return message.role === "user" && message.content; });
+        rememberThread(threadId, firstUserMessage ? firstUserMessage.content.slice(0, 32) : "新对话");
         render(false);
         setConnection("已连接", "会话已恢复。", "active");
       })
@@ -374,6 +478,7 @@
     threadState.busy = true;
     threadState.messages.push({ role: "user", content: content });
     threadState.messages.push({ role: "assistant", content: "", streaming: true });
+    rememberThread(threadState.threadId, content.slice(0, 32));
     elements.input.value = "";
     resizeInput();
     render(true);
@@ -428,8 +533,16 @@
     updateUi();
   }
 
-  // [事件绑定] 将页面操作映射到会话创建、清除、重试、输入和发送逻辑。
+  // [事件绑定] 将页面操作映射到侧栏、会话创建、清除、重试、输入和发送逻辑。
   elements.newThread.addEventListener("click", createThread);
+  elements.toggleSidebar.addEventListener("click", function () {
+    if (window.matchMedia("(max-width: 820px)").matches) {
+      setSidebarOpen(false);
+      return;
+    }
+    setSidebarCollapsed(!threadState.sidebarCollapsed);
+  });
+  elements.openSidebar.addEventListener("click", function () { setSidebarOpen(true); });
   elements.clearThread.addEventListener("click", clearThread);
   elements.dismissError.addEventListener("click", clearError);
   elements.retry.addEventListener("click", function () {
@@ -454,11 +567,17 @@
 
   var params = new URLSearchParams(window.location.search);
   var savedId = null;
+  var savedSidebarState = null;
   try {
     savedId = localStorage.getItem(STORAGE_KEY);
+    savedSidebarState = localStorage.getItem(SIDEBAR_STORAGE_KEY);
   } catch (error) {
-    console.debug("Unable to read the stored thread ID.", error);
+    console.debug("Unable to read the stored frontend state.", error);
   }
+  threadState.history = loadStoredHistory();
+  threadState.sidebarCollapsed = savedSidebarState === "1";
+  setSidebarCollapsed(threadState.sidebarCollapsed);
+  renderHistory();
   var initialId = params.get("thread_id") || savedId;
   updateHeader();
   updateUi();
