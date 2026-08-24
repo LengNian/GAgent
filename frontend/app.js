@@ -161,7 +161,7 @@
     if (isCurrentAssistant && threadState.executionSteps.length) {
       var thinking = document.createElement("details");
       thinking.className = "thinking";
-      thinking.open = Boolean(message.streaming);
+      thinking.open = true;
       var summary = document.createElement("summary");
       summary.textContent = "思考过程";
       thinking.appendChild(summary);
@@ -311,7 +311,7 @@
   function applyEvent(event, content) {
     // [逻辑规划] 进度事件只更新独立状态区；delta 追加最终文本，done 使用服务端最终文本，error 转换为异常。
     if (!event) return content;
-    if (event.name === "progress" || event.name === "tool_start" || event.name === "tool_end") {
+    if (event.name === "progress" || event.name === "agent_progress" || event.name === "tool_start" || event.name === "tool_end") {
       appendExecutionStep(event.name, event.data || {});
       return content;
     }
@@ -363,7 +363,6 @@
     threadState.busy = true;
     threadState.messages.push({ role: "user", content: content });
     threadState.messages.push({ role: "assistant", content: "", streaming: true });
-    appendExecutionStep("progress", { message: "正在分析你的问题，判断是否需要调用工具。" });
     elements.input.value = "";
     resizeInput();
     render(true);

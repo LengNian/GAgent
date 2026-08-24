@@ -21,6 +21,7 @@ class RouteDecision(BaseModel):
     intent: str = Field(min_length=1)
     entities: dict[str, Any] = Field(default_factory=dict)
     confidence: float = Field(ge=0, le=1)
+    decision_summary: str = Field(min_length=1, max_length=160)
 
 
 class AgentGraphState(MessagesState, total=False):
@@ -30,6 +31,7 @@ class AgentGraphState(MessagesState, total=False):
     intent: str
     entities: dict[str, Any]
     confidence: float
+    decision_summary: str
 
 
 def _build_model(settings: Settings) -> BaseChatModel:
@@ -125,6 +127,7 @@ def _create_orchestrated_agent(
             "intent": decision.intent,
             "entities": decision.entities,
             "confidence": decision.confidence,
+            "decision_summary": decision.decision_summary,
         }
 
     def route_to_agent(state: AgentGraphState) -> str:
@@ -151,6 +154,8 @@ def _create_orchestrated_agent(
     graph.add_node("supervisor", call_supervisor)
     graph.add_node("conversation_agent", call_conversation)
     graph.add_node("iot_agent", call_iot)
+
+    
     graph.add_edge(START, "supervisor")
     graph.add_conditional_edges(
         "supervisor",

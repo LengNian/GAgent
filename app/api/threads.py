@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent import create_agent
+from app.agent_manifest import get_agents_config
 
 
 logger = logging.getLogger(__name__)
@@ -115,6 +116,29 @@ def _safe_tool_arguments(arguments: object) -> dict[str, object]:
     return safe_arguments
 
 
+def _tool_agent_name(tool_name: str) -> str:
+    """根据 Action allowlist 返回工具所属 Agent 的展示名称。"""
+
+    display_names = {
+        "conversation_agent": "Conversation Agent",
+        "iot_agent": "IoT Agent",
+    }
+    for manifest in get_agents_config().agents:
+        if tool_name in manifest.allowed_actions:
+            return display_names.get(manifest.agent_id, manifest.agent_id)
+    return "领域 Agent"
+
+
+def _agent_display_name(agent_id: str) -> str:
+    """返回可展示的 Agent 名称，避免直接展示内部标识。"""
+
+    display_names = {
+        "conversation_agent": "Conversation Agent",
+        "iot_agent": "IoT Agent",
+    }
+    return display_names.get(agent_id, agent_id)
+
+
 async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
     """执行 Agent 并将回复转换为 SSE 流。
 
@@ -124,8 +148,8 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
     Yields:
         文本增量、完成或失败事件对应的 SSE 字符串。
     逻辑规划：
-    1. 创建 Agent，并先发送分析状态，让前端区分执行进度和最终答案。
-    2. 监听 LangGraph v2 生命周期事件，工具开始和结束直接转换为结构化进度事件。
+    1. 创建 Agent，并监听 LangGraph v2 的节点和工具生命周期事件。
+    2. Supervisor 节点结束时，读取模型实际返回的任务摘要和路由结果并转换为进度事件。
     3. 处理模型流式文本；模型结束事件仅在没有文本流时补发文本，避免最终回答重复。
     4. 工具参数只发送脱敏后的基础类型，不发送隐藏思维链或原始工具 JSON。
     5. 正常完成后追加助手消息并发送 done；任意执行异常转换为统一 error 事件。
@@ -138,14 +162,48 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
 
     try:
         agent = create_agent()
-        yield _format_sse_event(
-            "progress",
-            {"stage": "analysis", "message": "正在分析你的问题，判断是否需要调用工具。"},
-        )
         async for event in agent.astream_events({"messages": messages}, version="v2"):
             event_name = event.get("event")
             event_data = event.get("data") or {}
             run_id = str(event.get("run_id") or "")
+            node_name = (event.get("metadata") or {}).get("langgraph_node")
+
+            if event_name == "on_chain_end" and node_name == "supervisor":
+                output = event_data.get("output")
+                if not isinstance(output, dict):
+                    continue
+                decision_summary = output.get("decision_summary")
+                target_agent = output.get("target_agent")
+                if isinstance(decision_summary, str) and decision_summary:
+                    yield _format_sse_event(
+                        "agent_progress",
+                        {"message": f"Supervisor：{decision_summary}"},
+                    )
+                if target_agent in {"conversation_agent", "iot_agent"}:
+                    yield _format_sse_event(
+                        "agent_progress",
+                        {
+                            "message": (
+                                "Supervisor：我将使用 "
+                                f"{_agent_display_name(target_agent)} 处理。"
+                            )
+                        },
+                    )
+                continue
+
+            if event_name == "on_chain_start" and node_name == "conversation_agent":
+                yield _format_sse_event(
+                    "agent_progress",
+                    {"message": "Conversation Agent：正在生成回复。"},
+                )
+                continue
+
+            if event_name == "on_chain_start" and node_name == "iot_agent":
+                yield _format_sse_event(
+                    "agent_progress",
+                    {"message": "IoT Agent：正在核对设备 IP。"},
+                )
+                continue
 
             if event_name == "on_tool_start":
                 if run_id in started_tool_runs:
@@ -153,12 +211,13 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
                 started_tool_runs.add(run_id)
                 tool_name = str(event.get("name") or "工具")
                 tool_input = event_data.get("input", {})
+                agent_name = _tool_agent_name(tool_name)
                 yield _format_sse_event(
                     "tool_start",
                     {
                         "tool_name": tool_name,
                         "arguments": _safe_tool_arguments(tool_input),
-                        "message": f"已选择工具：{tool_name}。",
+                        "message": f"{agent_name}：调用 {tool_name}。",
                     },
                 )
                 continue
@@ -168,9 +227,13 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage]):
                     continue
                 completed_tool_runs.add(run_id)
                 tool_name = str(event.get("name") or "工具")
+                agent_name = _tool_agent_name(tool_name)
                 yield _format_sse_event(
                     "tool_end",
-                    {"tool_name": tool_name, "message": "工具结果已返回，正在整理回答。"},
+                    {
+                        "tool_name": tool_name,
+                        "message": f"{agent_name}：工具结果已返回，正在整理回答。",
+                    },
                 )
                 continue
 
