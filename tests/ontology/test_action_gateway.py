@@ -5,7 +5,15 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.action_gateway import ActionGateway
-from app.tools.http_client import ToolExecutionError
+from app.action_errors import (
+    ActionAuthorizationError,
+    ActionError,
+    ActionInternalError,
+    ActionPreconditionError,
+    ActionResponseError,
+    ActionTransportError,
+    ActionValidationError,
+)
 
 
 class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
@@ -15,6 +23,30 @@ class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
         """创建不包含敏感配置的测试 Settings 替身。"""
 
         self.settings = MagicMock()
+
+    def test_error_subclasses_have_fixed_error_types(self) -> None:
+        """错误类别由异常子类固定，错误码只用于细分具体情形。
+
+        逻辑规划：
+        1. 为每个有限错误类别创建一个实例并传入任意具体错误码。
+        2. 验证实例均属于 ActionError，确保 Gateway 可统一捕获。
+        3. 验证类别来自子类而非调用方传入的可变字符串。
+        """
+
+        error_cases = (
+            (ActionValidationError, "validation"),
+            (ActionPreconditionError, "precondition"),
+            (ActionAuthorizationError, "authorization"),
+            (ActionTransportError, "transport"),
+            (ActionResponseError, "response"),
+            (ActionInternalError, "internal"),
+        )
+
+        for error_class, expected_type in error_cases:
+            error = error_class("测试错误", error_code="test_error")
+            self.assertIsInstance(error, ActionError)
+            self.assertEqual(error.error_type, expected_type)
+            self.assertEqual(error.error_code, "test_error")
 
     async def test_allowed_action_calls_executor(self) -> None:
         """合法 IPv4 请求应调用 executor 并返回其 JSON 结果。
@@ -35,7 +67,9 @@ class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
                 )
             )
 
-        self.assertEqual(result, {"status": "online"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action_name"], "query_device_by_ip")
+        self.assertEqual(result["data"], {"status": "online"})
         request_mock.assert_awaited_once()
 
     async def test_invalid_ipv4_does_not_call_executor(self) -> None:
@@ -53,7 +87,8 @@ class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result["ok"])
         self.assertFalse(result["retryable"])
-        self.assertEqual(result["error_type"], "gateway_validation")
+        self.assertEqual(result["error_type"], "precondition")
+        self.assertEqual(result["error_code"], "invalid_ipv4")
         self.assertIn("valid IPv4", result["error"])
         request_mock.assert_not_awaited()
 
@@ -61,10 +96,10 @@ class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
         """网络类执行器错误必须标记为可重试，供后续编排使用。"""
 
         request_mock = AsyncMock(
-            side_effect=ToolExecutionError(
+            side_effect=ActionTransportError(
                 "设备查询服务暂时不可用",
                 retryable=True,
-                error_type="network",
+                error_code="upstream_network_error",
             )
         )
         with patch("app.action_gateway.request_tool_json", request_mock):
@@ -78,7 +113,8 @@ class ActionGatewayTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(result["ok"])
         self.assertTrue(result["retryable"])
-        self.assertEqual(result["error_type"], "network")
+        self.assertEqual(result["error_type"], "transport")
+        self.assertEqual(result["error_code"], "upstream_network_error")
         self.assertEqual(result["message"], "设备查询服务暂时不可用")
 
     async def test_unknown_action_is_rejected(self) -> None:

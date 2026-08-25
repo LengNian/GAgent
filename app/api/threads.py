@@ -92,6 +92,23 @@ def _chunk_text(chunk: object) -> str:
     return ""
 
 
+def _report_output_text(output: object) -> str:
+    """从 Report Node 的状态输出中提取最终助手文本。
+
+    逻辑规划：
+    1. 只接受包含 messages 列表的节点状态输出。
+    2. 读取最后一条消息，因为 Report Node 只追加一条最终报告消息。
+    3. 复用消息文本提取逻辑；未知结构返回空文本，不发送伪造 SSE 内容。
+    """
+
+    if not isinstance(output, dict):
+        return ""
+    messages = output.get("messages")
+    if not isinstance(messages, list) or not messages:
+        return ""
+    return _chunk_text(messages[-1])
+
+
 def _safe_tool_arguments(arguments: object) -> dict[str, object]:
     """整理可展示的工具参数，避免把敏感值或复杂原始结构发送到前端。
 
@@ -218,6 +235,20 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage], trace_id: 
                 )
                 continue
 
+            if event_name == "on_chain_start" and node_name == "report":
+                yield _format_sse_event(
+                    "agent_progress",
+                    {"message": "IoT Agent：正在生成查询报告。"},
+                )
+                continue
+
+            if event_name == "on_chain_end" and node_name == "report":
+                text = _report_output_text(event_data.get("output"))
+                if text:
+                    assistant_text += text
+                    yield _format_sse_event("delta", {"text": text})
+                continue
+
             if event_name == "on_tool_start":
                 if run_id in started_tool_runs:
                     continue
@@ -262,12 +293,14 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage], trace_id: 
                     "tool_end",
                     {
                         "tool_name": tool_name,
-                        "message": f"{agent_name}：工具结果已返回，正在整理回答。",
+                        "message": f"{agent_name}：工具结果已返回，正在生成查询报告。",
                     },
                 )
                 continue
 
             if event_name == "on_chat_model_stream":
+                if node_name == "report":
+                    continue
                 text = _chunk_text(event_data.get("chunk"))
                 if not text:
                     continue
@@ -277,6 +310,8 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage], trace_id: 
                 continue
 
             if event_name == "on_chat_model_end" and run_id not in streamed_model_runs:
+                if node_name == "report":
+                    continue
                 text = _chunk_text(event_data.get("output"))
                 if text and not getattr(event_data.get("output"), "tool_calls", None):
                     assistant_text += text

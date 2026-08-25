@@ -45,3 +45,13 @@ def get_agent_prompt(agent_id: str) -> str:
     """按 Agent 身份读取其最终系统 Prompt。"""
 
     return load_agent_prompt(get_agent_manifest(agent_id))
+
+
+def get_report_prompt() -> str:
+    """加载 Report Node 的受约束摘要 Prompt。"""
+
+    base_prompt = resolve_prompt_path("prompts/base.md").read_text(encoding="utf-8").strip()
+    report_prompt = resolve_prompt_path("prompts/report.md").read_text(encoding="utf-8").strip()
+    if not base_prompt or not report_prompt:
+        raise ValueError("Report prompt cannot be empty")
+    return f"{base_prompt}\n\n{report_prompt}"
