@@ -1,5 +1,6 @@
 """创建会话和流式返回 Agent 回复的 HTTP 接口。"""
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -25,6 +26,25 @@ class ThreadCreatedResponse(BaseModel):
     """创建会话后返回的响应模型。"""
 
     thread_id: UUID = Field(description="Server-generated UUIDv4 thread identifier")
+
+
+class ThreadSummaryResponse(BaseModel):
+    thread_id: UUID
+    title: str | None
+    title_is_custom: bool
+    updated_at: str
+
+
+class ThreadTitleRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=80)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        return value or None
 
 
 class MessageResponse(BaseModel):
@@ -61,6 +81,14 @@ class ChatRequest(BaseModel):
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 agent_router = APIRouter(prefix="/api/agent", tags=["agent"])
 _active_threads: set[UUID] = set()
+_active_threads_lock = asyncio.Lock()
+
+
+async def _release_active_thread(thread_id: UUID) -> None:
+    """在并发锁保护下释放会话运行标记。"""
+
+    async with _active_threads_lock:
+        _active_threads.discard(thread_id)
 
 _DEFAULT_AUTH_DATA: dict[str, Any] = {
     "access_token": "string",
@@ -448,7 +476,7 @@ async def _stream_reply(
             },
         )
     finally:
-        _active_threads.discard(thread_id)
+        await _release_active_thread(thread_id)
         reset_trace_id(trace_token)
 
 
@@ -471,6 +499,30 @@ async def create_thread(payload: dict[str, Any] | None = Body(default=None)) -> 
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return ThreadCreatedResponse(thread_id=thread_id)
+
+
+@router.get("", response_model=list[ThreadSummaryResponse])
+async def list_user_threads(payload: dict[str, Any] | None = Body(default=None)):
+    """返回当前用户的会话列表。"""
+    user_id = _user_id_from_auth_data(_auth_data_from_payload(payload))
+    try:
+        rows = await to_thread.run_sync(database.list_threads, user_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    return [ThreadSummaryResponse(thread_id=row[0], title=row[1], title_is_custom=row[2], updated_at=row[3].isoformat()) for row in rows]
+
+
+@router.patch("/{thread_id}")
+async def update_thread_title(thread_id: UUID, request: ThreadTitleRequest):
+    """设置或清除当前用户会话标题。"""
+    user_id = _user_id_from_auth_data(_DEFAULT_AUTH_DATA)
+    try:
+        updated = await to_thread.run_sync(database.update_thread_title, thread_id, user_id, request.title)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    if not updated:
+        raise HTTPException(status_code=404, detail="Thread not found")
+    return {"thread_id": thread_id, "title": request.title, "title_is_custom": request.title is not None}
 
 
 @router.get("/{thread_id}/messages", response_model=list[MessageResponse])
@@ -518,14 +570,21 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
     """
     auth_data = _auth_data_from_payload(request.model_dump())
     user_id = _user_id_from_auth_data(auth_data)
+    async with _active_threads_lock:
+        if thread_id in _active_threads:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Thread is already running")
+        _active_threads.add(thread_id)
+
     try:
         stored_messages = await to_thread.run_sync(database.load_messages, thread_id, user_id)
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:
+        await _release_active_thread(thread_id)
+        if isinstance(error, RuntimeError):
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        raise
     if stored_messages is None:
+        await _release_active_thread(thread_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
-    if thread_id in _active_threads:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Thread is already running")
 
     messages = [
         HumanMessage(content=content) if role == "user" else AIMessage(content=content)
@@ -535,11 +594,20 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
         persisted = await to_thread.run_sync(
             database.append_message, thread_id, user_id, "user", request.content
         )
-    except RuntimeError as error:
-        raise HTTPException(status_code=503, detail=str(error)) from error
+    except Exception as error:
+        await _release_active_thread(thread_id)
+        if isinstance(error, RuntimeError):
+            raise HTTPException(status_code=503, detail=str(error)) from error
+        raise
     if not persisted:
+        await _release_active_thread(thread_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
-    _active_threads.add(thread_id)
+    if not stored_messages:
+        try:
+            await to_thread.run_sync(database.set_auto_title_if_empty, thread_id, user_id, request.content)
+        except RuntimeError as error:
+            await _release_active_thread(thread_id)
+            raise HTTPException(status_code=503, detail=str(error)) from error
     messages.append(HumanMessage(content=request.content))
     trace_id = str(uuid4())
     return StreamingResponse(

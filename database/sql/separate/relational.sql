@@ -7,6 +7,8 @@ SET search_path TO aiagent, public;
 CREATE TABLE aiagent.threads (
   thread_id        UUID PRIMARY KEY,
   user_id          TEXT NOT NULL CHECK (btrim(user_id) <> ''),
+  title            TEXT,
+  title_is_custom  BOOLEAN NOT NULL DEFAULT FALSE,
   next_message_seq BIGINT NOT NULL DEFAULT 0 CHECK (next_message_seq >= 0),
   created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),

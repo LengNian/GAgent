@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.api.threads import agent_router, router as threads_router
+from app.database import close_pool
 from app.observability import configure_logging
 from app.startup import validate_startup_configuration
 
@@ -27,7 +28,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     configure_logging()
     validate_startup_configuration()
-    yield
+    try:
+        yield
+    finally:
+        close_pool()
 
 
 app = FastAPI(title="General-Agent", lifespan=lifespan)
