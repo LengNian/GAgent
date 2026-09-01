@@ -44,6 +44,12 @@
       if (!Array.isArray(stored)) return [];
       return stored.filter(function (item) {
         return item && typeof item.id === "string" && typeof item.title === "string";
+      }).map(function (item) {
+        return {
+          id: item.id,
+          title: item.title || null,
+          title_is_custom: item.title_is_custom === true
+        };
       }).slice(0, 20);
     } catch (error) {
       console.debug("Unable to read the stored thread history.", error);
@@ -59,7 +65,11 @@
       })
       .then(function (items) {
         threadState.history = Array.isArray(items) ? items.map(function (item) {
-          return { id: item.thread_id, title: item.title || "新对话" };
+          return {
+            id: item.thread_id,
+            title: typeof item.title === "string" && item.title.trim() ? item.title : null,
+            title_is_custom: item.title_is_custom === true
+          };
         }) : [];
         saveHistory();
         renderHistory();
@@ -88,11 +98,12 @@
       var button = document.createElement("button");
       button.type = "button";
       button.className = "thread-history-item" + (item.id === threadState.threadId ? " active" : "");
-      button.title = item.title;
+      var displayTitle = item.title || "新对话";
+      button.title = displayTitle;
       var dot = document.createElement("i");
       dot.setAttribute("aria-hidden", "true");
       var title = document.createElement("span");
-      title.textContent = item.title;
+      title.textContent = displayTitle;
       button.appendChild(dot);
       button.appendChild(title);
       button.addEventListener("click", function () {
@@ -144,9 +155,9 @@
     if (!threadId) return;
     var existing = threadState.history.find(function (item) { return item.id === threadId; });
     if (existing) {
-      if (title) existing.title = title;
+      if (!existing.title && title) existing.title = title;
     } else {
-      threadState.history.push({ id: threadId, title: title || "新对话" });
+      threadState.history.push({ id: threadId, title: title || null, title_is_custom: false });
     }
     threadState.history = threadState.history.slice(0, 20);
     saveHistory();
@@ -162,7 +173,16 @@
       if (!response.ok) throw new Error("会话标题更新失败。");
       return response.json();
     }).then(function (result) {
-      rememberThread(threadId, result.title || "新对话");
+      var existing = threadState.history.find(function (item) { return item.id === threadId; });
+      if (existing) {
+        existing.title = result.title || null;
+        existing.title_is_custom = result.title_is_custom === true;
+        saveHistory();
+        renderHistory();
+      } else {
+        rememberThread(threadId, result.title || "新对话");
+      }
+      return result;
     });
   }
 
