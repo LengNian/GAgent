@@ -525,6 +525,18 @@ async def update_thread_title(thread_id: UUID, request: ThreadTitleRequest):
     return {"thread_id": thread_id, "title": request.title, "title_is_custom": request.title is not None}
 
 
+@router.delete("/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_thread(thread_id: UUID) -> None:
+    """删除当前用户拥有的会话及其数据库级联关联数据。"""
+    user_id = _user_id_from_auth_data(_DEFAULT_AUTH_DATA)
+    try:
+        deleted = await to_thread.run_sync(database.delete_thread, thread_id, user_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Thread not found")
+
+
 @router.get("/{thread_id}/messages", response_model=list[MessageResponse])
 async def get_thread_messages(
     thread_id: UUID,

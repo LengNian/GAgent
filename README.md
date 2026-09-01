@@ -1,21 +1,21 @@
 # NMS Agent
 
-面向内部运维人员的对话式智能体（Agent）。基于 LangGraph 编排，FastAPI 提供 Web 对话与 SSE 流式接口；PostgreSQL + pgvector 持久化方案已设计，尚未接入运行时。
+面向内部运维人员的对话式智能体（Agent）。基于 LangGraph 编排，FastAPI 提供 Web 对话与 SSE 流式接口；当前已接入 PostgreSQL 会话和消息持久化，pgvector 记忆方案已完成设计但尚未接入运行流程。
 
-> 当前为无数据库依赖的 P0 Agent 编排阶段：支持对话、Supervisor 路由、IoT 只读查询、流式返回和安全 fallback。会话持久化与长期记忆待数据库接入后实现。详细需求见 `doc/PRD.md`。
+> 当前为 P0 Agent 编排阶段：支持对话、Supervisor 路由、IoT 只读查询、流式返回、安全 fallback，以及基于 PostgreSQL 的会话/消息持久化。长期记忆、语义检索和 LangGraph checkpoint 尚未接入运行流程。详细需求见 `doc/PRD.md`。
 
 ## 技术栈
 
 - **后端**：Python 3.12 / FastAPI / LangGraph / LangChain
 - **模型**：OpenAI 兼容接口（当前接入智谱 BigModel，见 `config/.env`）
-- **数据库**：PostgreSQL + pgvector（已完成设计，尚未接入运行时）
-- **ORM / 迁移**：SQLAlchemy (async) / Alembic（计划接入）
+- **数据库**：PostgreSQL（`threads/messages` 已接入）；pgvector 表和检索流程已设计，尚未接入
+- **数据访问 / 迁移**：`psycopg_pool` 同步连接池（通过线程池调用）；SQLAlchemy (async) / Alembic 计划接入
 - **配置**：Pydantic Settings + `.env` + `tools.yaml`
 
 ## 环境要求
 
 - Python >= 3.11（推荐 3.12）
-- PostgreSQL >= 14，并启用 `vector` 扩展（数据库接入阶段需要）
+- PostgreSQL >= 14；执行 `database/sql/combined.sql` 时还需要可安装 `vector` 扩展
 - 一个可用的 LLM API Key（OpenAI 兼容）
 
 ## 项目结构
@@ -23,7 +23,7 @@
 ```
 app/             # 应用代码（agent 编排、API、配置、数据访问）
 config/          # .env 与 tools.yaml 等配置文件
-database/        # 数据库设计 SQL（运行时接入尚未完成）
+database/        # PostgreSQL 业务表基线 SQL（当前运行时读写 threads/messages）
 doc/             # PRD 等产品文档
 tests/           # 测试用例
 scripts/         # 辅助脚本

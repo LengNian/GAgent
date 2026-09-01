@@ -20,8 +20,9 @@
 
   var elements = {};
 
-  ["appShell", "sidebar", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "agentLogin", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote", "deleteConfirm", "cancelDelete", "confirmDelete", "renameDialog", "renameForm", "renameInput", "cancelRename", "confirmRename"].forEach(function (id) { elements[id] = document.getElementById(id); });
+  ["appShell", "sidebar", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "agentLogin", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote", "deleteConfirm", "deleteConfirmMessage", "cancelDelete", "confirmDelete", "renameDialog", "renameForm", "renameInput", "cancelRename", "confirmRename"].forEach(function (id) { elements[id] = document.getElementById(id); });
   var renameThreadId = null;
+  var deleteThreadId = null;
 
   // [逻辑规划] 去掉配置地址末尾的斜杠，再拼接接口路径，兼容同源和独立前端部署。
   function apiUrl(path) { return API_BASE.replace(/\/$/, "") + path; }
@@ -131,7 +132,11 @@
             elements.renameDialog.classList.remove("hidden");
             elements.renameInput.focus();
           }
-          if (label === "删除") elements.deleteConfirm.classList.remove("hidden");
+          if (label === "删除") {
+            deleteThreadId = item.id;
+            elements.deleteConfirmMessage.textContent = "确定要删除会话“" + (item.title || "新对话") + "”吗？";
+            elements.deleteConfirm.classList.remove("hidden");
+          }
         });
         actions.appendChild(action);
       });
@@ -693,10 +698,25 @@
   elements.openSidebar.addEventListener("click", function () { setSidebarOpen(true); });
   elements.clearThread.addEventListener("click", clearThread);
   elements.dismissError.addEventListener("click", clearError);
-  elements.cancelDelete.addEventListener("click", function () { elements.deleteConfirm.classList.add("hidden"); });
-  elements.confirmDelete.addEventListener("click", function () {
+  elements.cancelDelete.addEventListener("click", function () {
+    deleteThreadId = null;
     elements.deleteConfirm.classList.add("hidden");
-    setConnection("已保留", "删除接口尚未接入，会话暂未删除。", "");
+  });
+  elements.confirmDelete.addEventListener("click", function () {
+    var threadId = deleteThreadId;
+    if (!threadId) return;
+    elements.confirmDelete.disabled = true;
+    fetch(apiUrl("/api/threads/" + encodeURIComponent(threadId)), { method: "DELETE" })
+      .then(function (response) {
+        if (!response.ok) throw new Error("会话删除失败。");
+        removeThreadFromHistory(threadId);
+        if (threadState.threadId === threadId) clearThread();
+        deleteThreadId = null;
+        elements.deleteConfirm.classList.add("hidden");
+        setConnection("已删除", "会话已删除。", "active");
+      })
+      .catch(function (error) { showError(error.message || "会话删除失败。"); })
+      .finally(function () { elements.confirmDelete.disabled = false; });
   });
   elements.cancelRename.addEventListener("click", function () {
     renameThreadId = null;
@@ -744,6 +764,7 @@
       elements.deleteConfirm.classList.add("hidden");
       elements.renameDialog.classList.add("hidden");
       renameThreadId = null;
+      deleteThreadId = null;
     }
   });
 

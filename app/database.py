@@ -117,6 +117,18 @@ def update_thread_title(thread_id: UUID, user_id: str, title: str | None) -> boo
     return row is not None
 
 
+def delete_thread(thread_id: UUID, user_id: str) -> bool:
+    """删除指定用户拥有的会话，并由数据库级联清理关联消息。"""
+    # [逻辑规划] 仅按会话 ID 和用户 ID 删除，避免用户删除其他用户的会话；
+    # 数据库外键负责级联删除消息和摘要，并将长期记忆来源置空。
+    with _connection() as connection:
+        row = connection.execute(
+            "DELETE FROM aiagent.threads WHERE thread_id = %s AND user_id = %s RETURNING thread_id",
+            (thread_id, user_id),
+        ).fetchone()
+    return row is not None
+
+
 def set_auto_title_if_empty(thread_id: UUID, user_id: str, title: str) -> None:
     """首次提问时设置自动标题，不覆盖用户自定义标题。"""
     with _connection() as connection:

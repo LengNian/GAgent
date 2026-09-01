@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f4f6">
   <title>NMS Agent</title>
   <link rel="stylesheet" href="./styles.css?v=20260901-5">
-  <script defer src="./app.js?v=20260901-2"></script>
+  <script defer src="./app.js?v=20260901-3"></script>
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -60,7 +60,7 @@
   <div class="confirm-overlay hidden" id="deleteConfirm" role="dialog" aria-modal="true" aria-labelledby="deleteConfirmTitle">
     <div class="confirm-dialog">
       <h2 id="deleteConfirmTitle">删除会话</h2>
-      <p>确定要删除这个会话吗？</p>
+      <p id="deleteConfirmMessage">确定要删除这个会话吗？</p>
       <div class="confirm-actions">
         <button class="button" id="cancelDelete" type="button">取消</button>
         <button class="button danger" id="confirmDelete" type="button">确认删除</button>

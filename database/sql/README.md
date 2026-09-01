@@ -15,3 +15,7 @@ Alembic migrations.
 The separate deployment intentionally has no foreign keys from the vector database to the
 relational database. `memory_id`, `chunk_id`, `document_id`, and `knowledge_base_id` are logical
 IDs maintained by the application, and vector writes must be idempotent and retryable.
+
+The current runtime uses `psycopg_pool` to read and write only `aiagent.threads` and
+`aiagent.messages`. The memory, summary, knowledge-base, and LangGraph checkpoint tables are
+design baselines and are not used by the application yet.
