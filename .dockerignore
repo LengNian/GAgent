@@ -1,0 +1,17 @@
+# 敏感配置：密钥绝不进镜像
+config/.env
+
+# 运行时不需的代码与缓存
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+tests/
+doc/
+scripts/
+proto/
+
+# 版本控制与项目元信息（注意：prompts/ 为运行时必需，不能排除）
+.git/
+.gitignore
+AGENTS.md
