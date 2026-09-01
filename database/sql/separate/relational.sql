@@ -58,7 +58,7 @@ CREATE TABLE aiagent.knowledge_bases (
   knowledge_base_id UUID PRIMARY KEY,
   name              TEXT NOT NULL CHECK (btrim(name) <> ''),
   description       TEXT,
-  scope_type        TEXT NOT NULL CHECK (scope_type IN ('global', 'user', 'team')),
+  scope_type        TEXT NOT NULL CHECK (scope_type IN ('global', 'user')),
   scope_id          TEXT,
   is_active         BOOLEAN NOT NULL DEFAULT TRUE,
   created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),

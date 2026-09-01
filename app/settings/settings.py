@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     llm_temperature: float = Field(validation_alias="LLM_TEMPERATURE")
     llm_timeout_seconds: float = Field(validation_alias="LLM_TIMEOUT_SECONDS")
     nms_api_base_url: str = Field(validation_alias="NMS_API_BASE_URL")
+    database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
 
     @field_validator("nms_api_base_url")
     @classmethod

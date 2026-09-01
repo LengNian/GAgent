@@ -2,9 +2,11 @@
 
 import json
 import logging
+from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, HTTPException, status
+from anyio import to_thread
+from fastapi import APIRouter, Body, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from pydantic import BaseModel, Field, field_validator
@@ -12,6 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 from app.agent import create_agent
 from app.agent.factory import AgentExecutionLimitError
 from app.agent_manifest import get_agents_config
+from app import database
 from app.observability import log_event, reset_trace_id, set_trace_id
 
 
@@ -36,6 +39,8 @@ class ChatRequest(BaseModel):
 
     content: str
 
+    model_config = {"extra": "allow"}
+
     @field_validator("content")
     @classmethod
     def content_must_not_be_blank(cls, value: str) -> str:
@@ -54,8 +59,78 @@ class ChatRequest(BaseModel):
 
 
 router = APIRouter(prefix="/api/threads", tags=["threads"])
-_thread_messages: dict[UUID, list[BaseMessage]] = {}
+agent_router = APIRouter(prefix="/api/agent", tags=["agent"])
 _active_threads: set[UUID] = set()
+
+_DEFAULT_AUTH_DATA: dict[str, Any] = {
+    "access_token": "string",
+    "expires_in": 0,
+    "token_type": "Bearer",
+    "user_info": {
+        "display_name": "string",
+        "granted_permissions": ["string"],
+        "mfa_enabled": True,
+        "roles": ["string"],
+        "tenant_id": "string",
+        "user_id": "user-admin-001",
+        "username": "admin",
+    },
+}
+
+
+def _auth_data_from_payload(payload: object) -> dict[str, Any]:
+    """从通用请求对象提取完整认证数据；前端未接入时使用默认模拟数据。"""
+
+    if isinstance(payload, dict):
+        data = payload.get("data")
+        if isinstance(data, dict):
+            return dict(data)
+    return dict(_DEFAULT_AUTH_DATA)
+
+
+def _user_id_from_auth_data(auth_data: dict[str, Any]) -> str:
+    """从完整认证数据中读取用户 ID。"""
+
+    user_info = auth_data.get("user_info")
+    if isinstance(user_info, dict) and isinstance(user_info.get("user_id"), str):
+        user_id = user_info["user_id"].strip()
+        if user_id:
+            return user_id
+    return str(_DEFAULT_AUTH_DATA["user_info"]["user_id"])
+
+
+@agent_router.post("/login")
+async def receive_agent_user_context(payload: dict[str, Any]) -> dict[str, Any]:
+    """接收前端登录信息并提取用户上下文。
+
+    当前接口只负责传输和结构校验；access_token 的签名、过期时间和权限校验
+    应在鉴权模块接入后完成。本接口不会记录或持久化 access_token。
+    """
+
+    if payload.get("code") != 0:
+        message = payload.get("message")
+        raise HTTPException(
+            status_code=401,
+            detail=message if isinstance(message, str) and message else "登录信息无效",
+        )
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise HTTPException(status_code=400, detail="Invalid authentication data")
+
+    access_token = data.get("access_token")
+    if not isinstance(access_token, str) or not access_token.strip():
+        raise HTTPException(status_code=401, detail="Missing access token")
+
+    user_info = data.get("user_info")
+    if not isinstance(user_info, dict):
+        raise HTTPException(status_code=400, detail="Missing user information")
+
+    return {
+        "code": 0,
+        "message": "success",
+        "data": data,
+    }
 
 
 
@@ -158,12 +233,18 @@ def _agent_display_name(agent_id: str) -> str:
     return display_names.get(agent_id, agent_id)
 
 
-async def _stream_reply(thread_id: UUID, messages: list[BaseMessage], trace_id: str):
+async def _stream_reply(
+    thread_id: UUID,
+    messages: list[BaseMessage],
+    trace_id: str,
+    user_id: str | None = None,
+):
     """执行 Agent 并将回复转换为 SSE 流。
 
     Args:
         thread_id: 当前正在执行的会话 ID。
-        messages: 传给 Agent 的进程内消息列表。
+        user_id: 当前会话所属用户 ID；旧的内部调用可不传入。
+        messages: 传给 Agent 的当前会话消息列表。
     Yields:
         文本增量、完成或失败事件对应的 SSE 字符串。
     逻辑规划：
@@ -318,6 +399,11 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage], trace_id: 
                     yield _format_sse_event("delta", {"text": text})
 
         messages.append(AIMessage(content=assistant_text))
+        if user_id is not None:
+            await to_thread.run_sync(
+                database.append_message, thread_id, user_id, "assistant", assistant_text
+            )
+            
         log_event(
             logger,
             logging.INFO,
@@ -367,7 +453,7 @@ async def _stream_reply(thread_id: UUID, messages: list[BaseMessage], trace_id: 
 
 
 @router.post("", response_model=ThreadCreatedResponse, status_code=status.HTTP_201_CREATED)
-async def create_thread() -> ThreadCreatedResponse:
+async def create_thread(payload: dict[str, Any] | None = Body(default=None)) -> ThreadCreatedResponse:
     """创建并返回服务端生成的新会话 ID。
 
     Returns:
@@ -379,30 +465,37 @@ async def create_thread() -> ThreadCreatedResponse:
     """
 
     thread_id = uuid4()
-    _thread_messages[thread_id] = []
+    user_id = _user_id_from_auth_data(_auth_data_from_payload(payload))
+    try:
+        await to_thread.run_sync(database.create_thread, thread_id, user_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
     return ThreadCreatedResponse(thread_id=thread_id)
 
 
 @router.get("/{thread_id}/messages", response_model=list[MessageResponse])
-async def get_thread_messages(thread_id: UUID) -> list[MessageResponse]:
+async def get_thread_messages(
+    thread_id: UUID,
+    payload: dict[str, Any] | None = Body(default=None),
+) -> list[MessageResponse]:
     """返回指定会话中可供页面展示的用户和助手消息。
 
     逻辑规划：
-    1. 根据 thread_id 查找当前进程中的消息列表；不存在时返回 404。
-    2. 只转换 HumanMessage 和 AIMessage，避免内部消息结构泄露给前端。
+    1. 根据 thread_id 和 user_id 从数据库查找消息；不存在或无权访问时返回 404。
+    2. 只返回 role 和 content，避免内部消息结构泄露给前端。
     3. 保持原消息列表顺序，返回前端可直接渲染的 role 和 content 字段。
     """
 
-    messages = _thread_messages.get(thread_id)
-    if messages is None:
+    user_id = _user_id_from_auth_data(_auth_data_from_payload(payload))
+    try:
+        stored_messages = await to_thread.run_sync(database.load_messages, thread_id, user_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    if stored_messages is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
     return [
-        MessageResponse(role="user", content=message.content)
-        if isinstance(message, HumanMessage)
-        else MessageResponse(role="assistant", content=message.content)
-        for message in messages
-        if isinstance(message, (HumanMessage, AIMessage))
+        MessageResponse(role=role, content=content) for role, content in stored_messages
     ]
 
 
@@ -418,23 +511,39 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
     Raises:
         HTTPException: 会话不存在或同一会话已有请求执行时抛出。
     逻辑规划：
-    1. 根据 thread_id 查找消息列表；不存在时返回 404。
+    1. 根据 thread_id 和 user_id 从数据库加载历史消息；不存在或无权访问时返回 404。
     2. 检查会话是否正在执行；是则返回 409，避免消息交错。
     3. 标记会话运行中，先追加用户消息，再创建 StreamingResponse。
     4. 具体 Agent 执行和标记清理由 _stream_reply 负责。
     """
-
-    messages = _thread_messages.get(thread_id)
-    if messages is None:
+    auth_data = _auth_data_from_payload(request.model_dump())
+    user_id = _user_id_from_auth_data(auth_data)
+    try:
+        stored_messages = await to_thread.run_sync(database.load_messages, thread_id, user_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    if stored_messages is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     if thread_id in _active_threads:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Thread is already running")
 
+    messages = [
+        HumanMessage(content=content) if role == "user" else AIMessage(content=content)
+        for role, content in stored_messages
+    ]
+    try:
+        persisted = await to_thread.run_sync(
+            database.append_message, thread_id, user_id, "user", request.content
+        )
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    if not persisted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     _active_threads.add(thread_id)
     messages.append(HumanMessage(content=request.content))
     trace_id = str(uuid4())
     return StreamingResponse(
-        _stream_reply(thread_id, messages, trace_id),
+        _stream_reply(thread_id, messages, trace_id, user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

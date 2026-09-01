@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from app.api.threads import router as threads_router
+from app.api.threads import agent_router, router as threads_router
 from app.observability import configure_logging
 from app.startup import validate_startup_configuration
 
@@ -32,4 +32,5 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="General-Agent", lifespan=lifespan)
 app.include_router(threads_router)
+app.include_router(agent_router)
 app.mount("/", StaticFiles(directory=FRONTEND_DIRECTORY, html=True), name="frontend")

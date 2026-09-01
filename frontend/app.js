@@ -19,7 +19,7 @@
 
   var elements = {};
 
-  ["appShell", "sidebar", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote"].forEach(function (id) { elements[id] = document.getElementById(id); });
+  ["appShell", "sidebar", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "agentLogin", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote"].forEach(function (id) { elements[id] = document.getElementById(id); });
 
   // [逻辑规划] 去掉配置地址末尾的斜杠，再拼接接口路径，兼容同源和独立前端部署。
   function apiUrl(path) { return API_BASE.replace(/\/$/, "") + path; }
@@ -320,6 +320,56 @@
   }
 
 
+  var mockLoginPayload = {
+    code: 0,
+    data: {
+      access_token: "string",
+      expires_in: 0,
+      token_type: "Bearer",
+      user_info: {
+        display_name: "string",
+        granted_permissions: ["string"],
+        mfa_enabled: true,
+        roles: ["string"],
+        tenant_id: "string",
+        user_id: "string",
+        username: "string"
+      }
+    },
+    message: "string"
+  };
+
+
+  function agentLogin() {
+    // [逻辑规划] 发送模拟登录响应；只展示登录状态，不输出 access_token，避免敏感信息泄露。
+    elements.agentLogin.disabled = true;
+    setConnection("正在登录", "正在提交模拟用户信息。", "");
+    fetch(apiUrl("/api/agent/login"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(mockLoginPayload)
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          if (!response.ok) throw new Error(data.detail || "Agent 登录失败");
+          return data;
+        });
+      })
+      .then(function (result) {
+        var userInfo = result.data && result.data.user_info;
+        var displayName = userInfo && userInfo.display_name ? userInfo.display_name : "用户";
+        setSession("已登录", "active");
+        setConnection("已登录", displayName + " 已获得 Agent 访问结果。", "active");
+      })
+      .catch(function (error) {
+        showError(error.message || "Agent 登录失败，请稍后重试。");
+      })
+      .finally(function () {
+        elements.agentLogin.disabled = false;
+      });
+  }
+
+
   function createThread() {
     // [逻辑规划] 先锁定创建状态防止重复点击，再请求服务端 UUID；成功后清空旧消息并激活输入框。
     if (threadState.creating) return;
@@ -535,6 +585,7 @@
 
   // [事件绑定] 将页面操作映射到侧栏、会话创建、清除、重试、输入和发送逻辑。
   elements.newThread.addEventListener("click", createThread);
+  elements.agentLogin.addEventListener("click", agentLogin);
   elements.toggleSidebar.addEventListener("click", function () {
     if (window.matchMedia("(max-width: 820px)").matches) {
       setSidebarOpen(false);
