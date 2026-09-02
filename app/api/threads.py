@@ -10,7 +10,9 @@ from anyio import to_thread
 from fastapi import APIRouter, Body, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
-from pydantic import BaseModel, Field, field_validator
+from app.api.agent import _DEFAULT_AUTH_DATA, _auth_data_from_payload, _user_id_from_auth_data
+from app.api.schemas.messages import ChatRequest, MessageResponse
+from app.api.schemas.threads import ThreadCreatedResponse, ThreadSummaryResponse, ThreadTitleRequest
 
 from app.agent import create_agent
 from app.agent.factory import AgentExecutionLimitError
@@ -22,64 +24,7 @@ from app.observability import log_event, reset_trace_id, set_trace_id
 logger = logging.getLogger(__name__)
 
 
-class ThreadCreatedResponse(BaseModel):
-    """创建会话后返回的响应模型。"""
-
-    thread_id: UUID = Field(description="Server-generated UUIDv4 thread identifier")
-
-
-class ThreadSummaryResponse(BaseModel):
-    thread_id: UUID
-    title: str | None
-    title_is_custom: bool
-    updated_at: str
-
-
-class ThreadTitleRequest(BaseModel):
-    title: str | None = Field(default=None, max_length=80)
-
-    @field_validator("title")
-    @classmethod
-    def normalize_title(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        value = value.strip()
-        return value or None
-
-
-class MessageResponse(BaseModel):
-    """供前端恢复展示的业务消息响应模型。"""
-
-    role: str
-    content: str
-
-
-class ChatRequest(BaseModel):
-    """聊天接口接收的用户输入模型。"""
-
-    content: str
-
-    model_config = {"extra": "allow"}
-
-    @field_validator("content")
-    @classmethod
-    def content_must_not_be_blank(cls, value: str) -> str:
-        """去除首尾空白，并拒绝不包含有效内容的消息。
-
-        逻辑规划：
-        1. 去除用户输入首尾的空白字符，统一后续保存和发送的内容。
-        2. 如果清理后为空，立即抛出校验异常，由 FastAPI 返回 422。
-        3. 返回清理后的文本，避免空白差异进入 Agent 上下文。
-        """
-
-        value = value.strip()
-        if not value:
-            raise ValueError("content must not be blank")
-        return value
-
-
 router = APIRouter(prefix="/api/threads", tags=["threads"])
-agent_router = APIRouter(prefix="/api/agent", tags=["agent"])
 _active_threads: set[UUID] = set()
 _active_threads_lock = asyncio.Lock()
 
@@ -89,77 +34,6 @@ async def _release_active_thread(thread_id: UUID) -> None:
 
     async with _active_threads_lock:
         _active_threads.discard(thread_id)
-
-_DEFAULT_AUTH_DATA: dict[str, Any] = {
-    "access_token": "string",
-    "expires_in": 0,
-    "token_type": "Bearer",
-    "user_info": {
-        "display_name": "string",
-        "granted_permissions": ["string"],
-        "mfa_enabled": True,
-        "roles": ["string"],
-        "tenant_id": "string",
-        "user_id": "user-admin-001",
-        "username": "admin",
-    },
-}
-
-
-def _auth_data_from_payload(payload: object) -> dict[str, Any]:
-    """从通用请求对象提取完整认证数据；前端未接入时使用默认模拟数据。"""
-
-    if isinstance(payload, dict):
-        data = payload.get("data")
-        if isinstance(data, dict):
-            return dict(data)
-    return dict(_DEFAULT_AUTH_DATA)
-
-
-def _user_id_from_auth_data(auth_data: dict[str, Any]) -> str:
-    """从完整认证数据中读取用户 ID。"""
-
-    user_info = auth_data.get("user_info")
-    if isinstance(user_info, dict) and isinstance(user_info.get("user_id"), str):
-        user_id = user_info["user_id"].strip()
-        if user_id:
-            return user_id
-    return str(_DEFAULT_AUTH_DATA["user_info"]["user_id"])
-
-
-@agent_router.post("/login")
-async def receive_agent_user_context(payload: dict[str, Any]) -> dict[str, Any]:
-    """接收前端登录信息并提取用户上下文。
-
-    当前接口只负责传输和结构校验；access_token 的签名、过期时间和权限校验
-    应在鉴权模块接入后完成。本接口不会记录或持久化 access_token。
-    """
-
-    if payload.get("code") != 0:
-        message = payload.get("message")
-        raise HTTPException(
-            status_code=401,
-            detail=message if isinstance(message, str) and message else "登录信息无效",
-        )
-
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        raise HTTPException(status_code=400, detail="Invalid authentication data")
-
-    access_token = data.get("access_token")
-    if not isinstance(access_token, str) or not access_token.strip():
-        raise HTTPException(status_code=401, detail="Missing access token")
-
-    user_info = data.get("user_info")
-    if not isinstance(user_info, dict):
-        raise HTTPException(status_code=400, detail="Missing user information")
-
-    return {
-        "code": 0,
-        "message": "success",
-        "data": data,
-    }
-
 
 
 def _format_sse_event(event: str, data: dict[str, object]) -> str:
@@ -537,7 +411,7 @@ async def delete_user_thread(thread_id: UUID) -> None:
         raise HTTPException(status_code=404, detail="Thread not found")
 
 
-@router.get("/{thread_id}/messages", response_model=list[MessageResponse])
+# Message routes are registered by app.api.messages.
 async def get_thread_messages(
     thread_id: UUID,
     payload: dict[str, Any] | None = Body(default=None),
@@ -563,7 +437,7 @@ async def get_thread_messages(
     ]
 
 
-@router.post("/{thread_id}/chat")
+# Chat route is registered by app.api.messages.
 async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingResponse:
     """为已有会话执行 Agent，并以 SSE 流返回回复。
 

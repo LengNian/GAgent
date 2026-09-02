@@ -2,7 +2,7 @@
 
 面向内部运维人员的对话式智能体（Agent）。基于 LangGraph 编排，FastAPI 提供 Web 对话与 SSE 流式接口；当前已接入 PostgreSQL 会话和消息持久化，pgvector 记忆方案已完成设计但尚未接入运行流程。
 
-> 当前为 P0 Agent 编排阶段：支持对话、Supervisor 路由、IoT 只读查询、流式返回、安全 fallback，以及基于 PostgreSQL 的会话/消息持久化。长期记忆、语义检索和 LangGraph checkpoint 尚未接入运行流程。详细需求见 `doc/PRD.md`。
+> 当前为 P0 Agent 编排阶段：支持对话、Supervisor 路由、IoT 只读查询、流式返回、安全 fallback，以及基于 PostgreSQL 的会话/消息持久化。长期记忆、语义检索和 LangGraph checkpoint 尚未接入运行流程。详细需求见 `doc/module/prd.md`。
 
 ## 技术栈
 

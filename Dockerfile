@@ -19,10 +19,17 @@ COPY frontend ./frontend
 # prompts 为运行时必需（prompt_loader 按 /app/prompts 加载），必须打进镜像
 COPY prompts ./prompts
 
+# 数据库初始化 SQL（运维已有独立 PG 时，容器启动按 DATABASE_URL 自动建表）
+COPY database/sql ./database/sql
+COPY docker/db_init.py /app/db_init.py
+COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
 EXPOSE 8000
 
 # 轻量存活探针：根路径由 FastAPI 托管前端，返回 200 即视为存活。
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/').status==200 else 1)"
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
