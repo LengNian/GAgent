@@ -170,15 +170,12 @@ async def _stream_reply(
             else agent.astream_events(graph_input, version="v2")
         )
         interrupted = False
-        approval_rejected = False
         async for event in event_stream:
 
             event_name = event.get("event")
             event_data = event.get("data") or {}
             event_output = event_data.get("output") if isinstance(event_data, dict) else None
             event_chunk = event_data.get("chunk") if isinstance(event_data, dict) else None
-            if isinstance(event_output, dict) and event_output.get("approval_rejected"):
-                approval_rejected = True
             if (
                 event_name == "on_chain_end"
                 and isinstance(event_output, dict)
@@ -329,8 +326,6 @@ async def _stream_reply(
 
         if interrupted:
             return
-        if approval_rejected:
-            assistant_text = "操作已取消。"
         if not assistant_text:
             raise ValueError("Agent returned an empty response")
         messages.append(AIMessage(content=assistant_text))

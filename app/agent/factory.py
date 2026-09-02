@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, MessagesState, StateGraph
-from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
@@ -43,6 +43,12 @@ class AgentGraphState(MessagesState, total=False):
     entities: dict[str, Any]
     confidence: float
     decision_summary: str
+
+
+class DomainGraphState(MessagesState, total=False):
+    """可复用领域子图的运行状态。"""
+
+    approval_rejected: bool
 
 
 class AgentExecutionLimitError(Exception):
@@ -271,7 +277,7 @@ def _create_domain_agent(
         response = await model_with_tools.ainvoke(_messages_with_prompt(agent_id, state))
         return {"messages": [response]}
 
-    async def report(state: MessagesState) -> dict[str, list[Any]]:
+    async def report(state: DomainGraphState) -> dict[str, list[Any]]:
         """根据实际工具结果生成确定性最终报告。
 
         逻辑规划：
@@ -279,19 +285,67 @@ def _create_domain_agent(
         2. 将结构化 ActionResult 转换为成功数据或安全失败说明。
         3. 追加最终 AIMessage 并结束子图，阻止工具调用后的模型二次生成。
         """
+        if state.get("approval_rejected"):
+            return {"messages": [AIMessage(content="操作已取消。")]}
         report_message = await _report_message_for_messages(
             state.get("messages", []),
             model,
         )
         return {"messages": [AIMessage(content=report_message)]}
 
-    graph = StateGraph(MessagesState)
+    async def approval_gate(state: DomainGraphState) -> dict[str, object]:
+        """在领域工具执行前处理中断，并记录人工拒绝结果。"""
+
+        messages = state.get("messages", [])
+        latest = messages[-1] if messages else None
+        content = getattr(latest, "content", "")
+        if not isinstance(content, str) or "[模拟中断]" not in content:
+            return {}
+        decision = interrupt(
+            {
+                "type": "approval_required",
+                "action": f"{agent_id}_operation",
+                "message": "检测到可能产生修改的操作，请确认后继续。",
+            }
+        )
+        if decision is True or (isinstance(decision, dict) and decision.get("approved") is True):
+            return {}
+        return {"approval_rejected": True}
+
+    def route_after_model(state: DomainGraphState) -> str:
+        """模型完成判断后决定是否进入审批节点或直接结束。"""
+
+        latest = state.get("messages", [])[-1:] or [None]
+        message = latest[0]
+        content = getattr(message, "content", "")
+        has_simulated_interrupt = isinstance(content, str) and "[模拟中断]" in content
+        return "approval_gate" if has_simulated_interrupt else ("tools" if getattr(message, "tool_calls", []) else END)
+
+    def route_after_approval(state: DomainGraphState) -> str:
+        """根据审批结果决定执行工具或结束当前领域子图。"""
+
+        if state.get("approval_rejected"):
+            return "report"
+        latest = state.get("messages", [])[-1:] or [None]
+        return "tools" if getattr(latest[0], "tool_calls", []) else END
+
+    graph = StateGraph(DomainGraphState)
     graph.add_node("call_model", call_model)
     graph.add_edge(START, "call_model")
     if tools:
         graph.add_node("tools", ToolNode(tools))
         graph.add_node("report", report)
-        graph.add_conditional_edges("call_model", tools_condition, {"tools": "tools", END: END})
+        graph.add_node("approval_gate", approval_gate)
+        graph.add_conditional_edges(
+            "call_model",
+            route_after_model,
+            {"approval_gate": "approval_gate", "tools": "tools", END: END},
+        )
+        graph.add_conditional_edges(
+            "approval_gate",
+            route_after_approval,
+            {"tools": "tools", "report": "report", END: END},
+        )
         graph.add_edge("tools", "report")
         graph.add_edge("report", END)
     else:
@@ -327,30 +381,6 @@ def _create_orchestrated_agent(
         model=model,
         settings=settings,
     )
-
-    async def approval_demo(state: AgentGraphState) -> dict[str, object]:
-        """模拟副作用操作的人工确认中断，仅用于验证 checkpoint 恢复链路。"""
-
-        messages = state.get("messages", [])
-        latest = messages[-1] if messages else None
-        content = getattr(latest, "content", "")
-        if not isinstance(content, str) or "[模拟中断]" not in content:
-            return {}
-        decision = interrupt(
-            {
-                "type": "approval_required",
-                "action": "simulated_set_operation",
-                "message": "检测到模拟修改操作，请确认后继续。",
-            }
-        )
-        if decision is True or (isinstance(decision, dict) and decision.get("approved") is True):
-            return {}
-        return {"approval_rejected": True}
-
-    def route_after_approval(state: AgentGraphState) -> str:
-        """根据人工确认结果决定继续 Agent 或正常结束。"""
-
-        return END if state.get("approval_rejected") else "supervisor"
 
     async def call_supervisor(state: AgentGraphState) -> dict[str, object]:
         """调用 Supervisor 并保存结构化路由字段，不把路由结果写入对话消息。"""
@@ -389,7 +419,10 @@ def _create_orchestrated_agent(
             graph=conversation_graph,
             messages=state["messages"],
         )
-        return {"messages": result["messages"][-1:]}
+        return {
+            "messages": result["messages"][-1:],
+            "approval_rejected": bool(result.get("approval_rejected")),
+        }
 
     async def call_iot(state: AgentGraphState) -> dict[str, list[Any]]:
         """执行 IoT Agent 子图。"""
@@ -399,21 +432,18 @@ def _create_orchestrated_agent(
             graph=iot_graph,
             messages=state["messages"],
         )
-        return {"messages": result["messages"][-1:]}
+        return {
+            "messages": result["messages"][-1:],
+            "approval_rejected": bool(result.get("approval_rejected")),
+        }
 
     graph = StateGraph(AgentGraphState)
-    graph.add_node("approval_demo", approval_demo)
     graph.add_node("supervisor", call_supervisor)
     graph.add_node("conversation_agent", call_conversation)
     graph.add_node("iot_agent", call_iot)
 
 
-    graph.add_edge(START, "approval_demo")
-    graph.add_conditional_edges(
-        "approval_demo",
-        route_after_approval,
-        {"supervisor": "supervisor", END: END},
-    )
+    graph.add_edge(START, "supervisor")
     graph.add_conditional_edges(
         "supervisor",
         route_to_agent,
