@@ -7,9 +7,12 @@ from uuid import UUID
 
 from anyio import to_thread
 from langchain_core.messages import AIMessage, BaseMessage
+from langgraph.types import Command
+from langgraph.errors import GraphInterrupt
 
 from app import database
 from app.agent import create_agent
+from app.checkpoint import get_checkpointer
 from app.agent.factory import AgentExecutionLimitError
 from app.agent_manifest import get_agents_config
 from app.observability import log_event, reset_trace_id, set_trace_id
@@ -131,6 +134,7 @@ async def _stream_reply(
     messages: list[BaseMessage],
     trace_id: str,
     user_id: str | None = None,
+    input_value: object | None = None,
 ):
     """执行 Agent 并将回复转换为 SSE 流。
 
@@ -156,11 +160,43 @@ async def _stream_reply(
 
     try:
         log_event(logger, logging.INFO, "agent_request_started", thread_id=str(thread_id))
-        agent = create_agent()
-        async for event in agent.astream_events({"messages": messages}, version="v2"):
+        checkpointer = get_checkpointer()
+        agent = create_agent(checkpointer=checkpointer) if checkpointer else create_agent()
+        config = {"configurable": {"thread_id": str(thread_id)}}
+        graph_input = input_value if input_value is not None else {"messages": messages}
+        event_stream = (
+            agent.astream_events(graph_input, config=config, version="v2")
+            if checkpointer
+            else agent.astream_events(graph_input, version="v2")
+        )
+        interrupted = False
+        approval_rejected = False
+        async for event in event_stream:
 
             event_name = event.get("event")
             event_data = event.get("data") or {}
+            event_output = event_data.get("output") if isinstance(event_data, dict) else None
+            event_chunk = event_data.get("chunk") if isinstance(event_data, dict) else None
+            if isinstance(event_output, dict) and event_output.get("approval_rejected"):
+                approval_rejected = True
+            if (
+                event_name == "on_chain_end"
+                and isinstance(event_output, dict)
+                and "__interrupt__" in event_output
+            ) or (
+                isinstance(event_data, dict) and "__interrupt__" in event_data
+            ) or (
+                isinstance(event_chunk, dict) and "__interrupt__" in event_chunk
+            ):
+                interrupted = True
+                yield _format_sse_event(
+                    "interrupt",
+                    {
+                        "thread_id": str(thread_id),
+                        "message": "操作需要人工确认，请确认后继续。",
+                    },
+                )
+                break
             run_id = str(event.get("run_id") or "")
             node_name = (event.get("metadata") or {}).get("langgraph_node")
 
@@ -291,6 +327,12 @@ async def _stream_reply(
                     assistant_text += text
                     yield _format_sse_event("delta", {"text": text})
 
+        if interrupted:
+            return
+        if approval_rejected:
+            assistant_text = "操作已取消。"
+        if not assistant_text:
+            raise ValueError("Agent returned an empty response")
         messages.append(AIMessage(content=assistant_text))
         if user_id is not None:
             await to_thread.run_sync(
@@ -309,6 +351,14 @@ async def _stream_reply(
             {
                 "trace_id": trace_id,
                 "message": {"role": "assistant", "content": assistant_text},
+            },
+        )
+    except GraphInterrupt:
+        yield _format_sse_event(
+            "interrupt",
+            {
+                "thread_id": str(thread_id),
+                "message": "操作需要人工确认，请确认后继续。",
             },
         )
     except AgentExecutionLimitError as error:
@@ -350,4 +400,9 @@ active_threads_lock = _active_threads_lock
 release_active_thread = _release_active_thread
 stream_reply = _stream_reply
 
-__all__ = ["active_threads", "active_threads_lock", "release_active_thread", "stream_reply"]
+
+def resume_command(approved: bool, reason: str | None = None) -> Command:
+    """构造人工确认恢复命令。"""
+    return Command(resume={"approved": approved, "reason": reason})
+
+__all__ = ["active_threads", "active_threads_lock", "release_active_thread", "stream_reply", "resume_command"]

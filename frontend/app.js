@@ -4,6 +4,10 @@
   var STORAGE_KEY = "nms_agent_thread_id";
   var HISTORY_STORAGE_KEY = "nms_agent_thread_history";
   var SIDEBAR_STORAGE_KEY = "nms_agent_sidebar_collapsed";
+  var SIDEBAR_WIDTH_STORAGE_KEY = "nms_agent_sidebar_width";
+  var THEME_STORAGE_KEY = "nms_agent_theme";
+  var SIDEBAR_MIN_WIDTH = 220;
+  var SIDEBAR_MAX_WIDTH = 420;
   var MAX_LENGTH = 4000;
   
   var threadState = {
@@ -11,6 +15,7 @@
     pendingNew: false,
     messages: [],
     busy: false, 
+    awaitingInterrupt: false,
     creating: false, 
     failedContent: "",
     executionSteps: [],
@@ -20,9 +25,10 @@
 
   var elements = {};
 
-  ["appShell", "sidebar", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "agentLogin", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote", "deleteConfirm", "deleteConfirmMessage", "cancelDelete", "confirmDelete", "renameDialog", "renameForm", "renameInput", "cancelRename", "confirmRename"].forEach(function (id) { elements[id] = document.getElementById(id); });
+  ["appShell", "sidebar", "sidebarResize", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "agentLogin", "themeToggle", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote", "deleteConfirm", "deleteConfirmMessage", "cancelDelete", "confirmDelete", "renameDialog", "renameForm", "renameInput", "cancelRename", "confirmRename", "interruptDialog", "interruptMessage", "cancelInterrupt", "confirmInterrupt"].forEach(function (id) { elements[id] = document.getElementById(id); });
   var renameThreadId = null;
   var deleteThreadId = null;
+  var interruptThreadId = null;
 
   // [逻辑规划] 去掉配置地址末尾的斜杠，再拼接接口路径，兼容同源和独立前端部署。
   function apiUrl(path) { return API_BASE.replace(/\/$/, "") + path; }
@@ -156,13 +162,13 @@
 
 
   function rememberThread(threadId, title) {
-    // [逻辑规划] 保持会话列表创建顺序；已有会话只更新标题，不因点击或加载而移动位置。
+    // [逻辑规划] 新会话始终插入列表顶部；已有会话只更新标题，不因点击或加载而移动位置。
     if (!threadId) return;
     var existing = threadState.history.find(function (item) { return item.id === threadId; });
     if (existing) {
       if (!existing.title && title) existing.title = title;
     } else {
-      threadState.history.push({ id: threadId, title: title || null, title_is_custom: false });
+      threadState.history.unshift({ id: threadId, title: title || null, title_is_custom: false });
     }
     threadState.history = threadState.history.slice(0, 20);
     saveHistory();
@@ -218,6 +224,47 @@
   function setSidebarOpen(open) {
     // [逻辑规划] 移动端以抽屉状态打开或关闭侧栏，桌面端不改变布局折叠状态。
     elements.appShell.classList.toggle("sidebar-open", Boolean(open));
+  }
+
+  function setSidebarWidth(width) {
+    var nextWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, Math.round(width)));
+    document.documentElement.style.setProperty("--sidebar-width", nextWidth + "px");
+    try { localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(nextWidth)); } catch (error) { console.debug("Unable to store the sidebar width.", error); }
+  }
+
+  function loadSidebarWidth() {
+    try {
+      var storedWidth = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY));
+      if (Number.isFinite(storedWidth)) setSidebarWidth(storedWidth);
+    } catch (error) { console.debug("Unable to read the sidebar width.", error); }
+  }
+
+  function setTheme(theme, persist) {
+    if (theme === "light" || theme === "dark") {
+      document.documentElement.setAttribute("data-theme", theme);
+      elements.themeToggle.querySelector("span").textContent = theme === "dark" ? "☀" : "◐";
+      elements.themeToggle.title = theme === "dark" ? "切换浅色模式" : "切换深色模式";
+      elements.themeToggle.setAttribute("aria-label", elements.themeToggle.title);
+      if (persist) {
+        try { localStorage.setItem(THEME_STORAGE_KEY, theme); } catch (error) { console.debug("Unable to store the theme.", error); }
+      }
+      return;
+    }
+    document.documentElement.removeAttribute("data-theme");
+  }
+
+  function loadTheme() {
+    var storedTheme = null;
+    try { storedTheme = localStorage.getItem(THEME_STORAGE_KEY); } catch (error) { console.debug("Unable to read the theme.", error); }
+    if (storedTheme === "light" || storedTheme === "dark") {
+      setTheme(storedTheme, false);
+      return;
+    }
+    setTheme(null, false);
+    var followsDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+    elements.themeToggle.querySelector("span").textContent = followsDark ? "☀" : "◐";
+    elements.themeToggle.title = followsDark ? "切换浅色模式" : "切换深色模式";
+    elements.themeToggle.setAttribute("aria-label", elements.themeToggle.title);
   }
   
   
@@ -347,6 +394,7 @@
     meta.className = "message-meta";
     meta.textContent = message.role === "user" ? "YOU" : "AGENT";
     bubble.appendChild(meta);
+    row.appendChild(bubble);
 
     var isCurrentAssistant = message.role === "assistant" && message === threadState.messages[threadState.messages.length - 1];
     if (isCurrentAssistant && threadState.executionSteps.length) {
@@ -379,8 +427,36 @@
       text.textContent = message.content || "";
       bubble.appendChild(text);
     }
-    row.appendChild(bubble);
+    if (message.content && !message.streaming && !message.error) {
+      var actions = document.createElement("div");
+      actions.className = "message-actions";
+      var actionDefinitions = [["⧉", "copy", "复制消息"]];
+      if (message.role === "assistant") actionDefinitions.push(["👍", "up", "赞"], ["👎", "down", "踩"]);
+      actionDefinitions.forEach(function (definition) {
+        var action = document.createElement("button");
+        action.type = "button";
+        action.textContent = definition[0];
+        action.title = definition[2];
+        action.setAttribute("aria-label", definition[2]);
+        action.classList.toggle("active", message.feedback === definition[1]);
+        action.addEventListener("click", function (event) {
+          event.stopPropagation();
+          if (definition[1] === "copy") copyMessage(message.content);
+          if (definition[1] === "up" || definition[1] === "down") {
+            message.feedback = message.feedback === definition[1] ? null : definition[1];
+            render(false);
+          }
+        });
+        actions.appendChild(action);
+      });
+      row.appendChild(actions);
+    }
     return row;
+  }
+
+  function copyMessage(content) {
+    var copied = navigator.clipboard ? navigator.clipboard.writeText(content) : Promise.reject(new Error("clipboard unavailable"));
+    copied.then(function () { setConnection("已复制", "消息已复制到剪贴板。", "active"); }).catch(function () { setConnection("复制失败", "请手动选择文本复制。", "error"); });
   }
 
 
@@ -569,6 +645,10 @@
     }
     if (event.name === "delta") return content + (event.data.text || "");
     if (event.name === "done") return (event.data.message && event.data.message.content) || content;
+    if (event.name === "interrupt") {
+      showInterrupt(event.data || {});
+      return content;
+    }
     if (event.name === "error") {
       var errorMessage = event.data.message || "Agent 执行失败。";
       if (event.data.trace_id) errorMessage += "（trace_id: " + event.data.trace_id + "）";
@@ -586,6 +666,7 @@
     var buffer = "";
     var content = "";
     var sawTerminalEvent = false;
+    var sawInterrupt = false;
     function next() {
       // [逻辑规划] 读取一块数据；未结束则递归继续，结束则处理剩余缓冲并提交最终助手消息。
       return reader.read().then(function (chunk) {
@@ -593,11 +674,12 @@
           buffer += decoder.decode();
           if (buffer.trim()) {
             var finalEvent = parseEvent(buffer);
-            if (finalEvent && (finalEvent.name === "done" || finalEvent.name === "error")) sawTerminalEvent = true;
+            if (finalEvent && (finalEvent.name === "done" || finalEvent.name === "error" || finalEvent.name === "interrupt")) sawTerminalEvent = true;
+            if (finalEvent && finalEvent.name === "interrupt") sawInterrupt = true;
             content = applyEvent(finalEvent, content);
           }
           if (!sawTerminalEvent) throw new Error("流式响应提前结束，请重试。");
-          setAssistant(content, false, false);
+          if (!sawInterrupt) setAssistant(content, false, false);
           return;
         }
         buffer += decoder.decode(chunk.value, { stream: true });
@@ -605,7 +687,8 @@
         buffer = blocks.pop();
         blocks.forEach(function (block) {
           var event = parseEvent(block);
-          if (event && (event.name === "done" || event.name === "error")) sawTerminalEvent = true;
+          if (event && (event.name === "done" || event.name === "error" || event.name === "interrupt")) sawTerminalEvent = true;
+          if (event && event.name === "interrupt") sawInterrupt = true;
           content = applyEvent(event, content);
           if (event && (event.name === "delta" || event.name === "done")) setAssistant(content, event.name === "delta", false);
         });
@@ -613,6 +696,43 @@
       });
     }
     return next();
+  }
+
+  function showInterrupt(data) {
+    interruptThreadId = data.thread_id || threadState.threadId;
+    threadState.awaitingInterrupt = true;
+    setSession("等待确认", "active");
+    setConnection("等待确认", "请先处理人工确认操作。", "active");
+    updateUi();
+    elements.interruptMessage.textContent = data.message || "该操作需要人工确认后才能继续。";
+    elements.interruptDialog.classList.remove("hidden");
+    elements.confirmInterrupt.focus();
+  }
+
+  function resumeInterrupt(approved) {
+    if (!interruptThreadId || elements.confirmInterrupt.disabled) return;
+    elements.confirmInterrupt.disabled = true;
+    elements.cancelInterrupt.disabled = true;
+    fetch(apiUrl("/api/threads/" + encodeURIComponent(interruptThreadId) + "/resume"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ approved: approved })
+    })
+      .then(function (response) {
+        if (!response.ok) return responseError(response).then(function (message) { throw new Error(message); });
+        elements.interruptDialog.classList.add("hidden");
+        return readStream(response);
+      })
+      .then(function () { setConnection(approved ? "已确认" : "已取消", approved ? "操作已继续。" : "操作已取消。", approved ? "active" : ""); })
+      .catch(function (error) { showError(error.message || "无法恢复中断操作。", ""); })
+      .finally(function () {
+        interruptThreadId = null;
+        threadState.awaitingInterrupt = false;
+        threadState.busy = false;
+        elements.confirmInterrupt.disabled = false;
+        elements.cancelInterrupt.disabled = false;
+        updateUi();
+      });
   }
 
 
@@ -660,7 +780,7 @@
         threadState.failedContent = content;
         showError(error.message || "本次回答失败，请重试。", content);
       })
-      .finally(function () { threadState.busy = false; updateUi(); elements.input.focus(); });
+      .finally(function () { threadState.busy = threadState.awaitingInterrupt; updateUi(); elements.input.focus(); });
   }
 
 
@@ -678,6 +798,7 @@
     threadState.pendingNew = false;
     threadState.messages = [];
     threadState.busy = false;
+    threadState.awaitingInterrupt = false;
     clearError();
     clearExecution();
     updateHeader();
@@ -697,11 +818,36 @@
   });
   elements.openSidebar.addEventListener("click", function () { setSidebarOpen(true); });
   elements.clearThread.addEventListener("click", clearThread);
+  elements.themeToggle.addEventListener("click", function () {
+    var explicitTheme = document.documentElement.getAttribute("data-theme");
+    var isDark = explicitTheme ? explicitTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+    setTheme(isDark ? "light" : "dark", true);
+  });
+  elements.sidebarResize.addEventListener("pointerdown", function (event) {
+    if (window.matchMedia("(max-width: 820px)").matches || threadState.sidebarCollapsed) return;
+    event.preventDefault();
+    elements.sidebarResize.setPointerCapture(event.pointerId);
+    elements.sidebar.classList.add("is-resizing");
+    var startX = event.clientX;
+    var startWidth = elements.sidebar.getBoundingClientRect().width;
+    function resize(pointerEvent) { setSidebarWidth(startWidth + pointerEvent.clientX - startX); }
+    function stopResize() {
+      elements.sidebar.classList.remove("is-resizing");
+      elements.sidebarResize.removeEventListener("pointermove", resize);
+      elements.sidebarResize.removeEventListener("pointerup", stopResize);
+      elements.sidebarResize.removeEventListener("pointercancel", stopResize);
+    }
+    elements.sidebarResize.addEventListener("pointermove", resize);
+    elements.sidebarResize.addEventListener("pointerup", stopResize);
+    elements.sidebarResize.addEventListener("pointercancel", stopResize);
+  });
   elements.dismissError.addEventListener("click", clearError);
   elements.cancelDelete.addEventListener("click", function () {
     deleteThreadId = null;
     elements.deleteConfirm.classList.add("hidden");
   });
+  elements.cancelInterrupt.addEventListener("click", function () { resumeInterrupt(false); });
+  elements.confirmInterrupt.addEventListener("click", function () { resumeInterrupt(true); });
   elements.confirmDelete.addEventListener("click", function () {
     var threadId = deleteThreadId;
     if (!threadId) return;
@@ -775,6 +921,8 @@
     console.debug("Unable to read the stored frontend state.", error);
   }
   threadState.history = loadStoredHistory();
+  loadTheme();
+  loadSidebarWidth();
   threadState.sidebarCollapsed = savedSidebarState === "1";
   setSidebarCollapsed(threadState.sidebarCollapsed);
   renderHistory();

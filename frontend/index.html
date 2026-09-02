@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#f3f4f6">
   <title>NMS Agent</title>
-  <link rel="stylesheet" href="./styles.css?v=20260901-5">
-  <script defer src="./app.js?v=20260901-3"></script>
+  <link rel="stylesheet" href="./styles.css?v=20260902-5">
+  <script defer src="./app.js?v=20260902-8"></script>
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -28,6 +28,7 @@
         <span class="user-avatar" aria-hidden="true">A</span>
         <div class="user-copy"><small>当前用户</small><strong id="currentUser">admin</strong></div>
       </div>
+      <div class="sidebar-resize-handle" id="sidebarResize" role="separator" aria-orientation="vertical" aria-label="调整侧栏宽度"></div>
     </aside>
     <main class="main-content">
       <header class="topbar">
@@ -35,6 +36,7 @@
         <div class="topbar-context"><p class="eyebrow">NMS / ASSISTANT</p><span>智能运维工作台</span></div>
         <div class="topbar-actions">
           <span class="session-status"><i id="statusDot" aria-hidden="true"></i><span id="sessionStatus">无活动会话</span></span>
+          <button class="icon-button theme-toggle" id="themeToggle" type="button" title="切换深色模式" aria-label="切换深色模式"><span aria-hidden="true">◐</span></button>
           <button class="button" id="agentLogin" type="button">模拟 Agent 登录</button>
         </div>
       </header>
@@ -77,6 +79,16 @@
         <button class="button primary" id="confirmRename" type="submit">保存</button>
       </div>
     </form>
+  </div>
+  <div class="confirm-overlay hidden" id="interruptDialog" role="dialog" aria-modal="true" aria-labelledby="interruptDialogTitle">
+    <div class="confirm-dialog">
+      <h2 id="interruptDialogTitle">需要人工确认</h2>
+      <p id="interruptMessage">该操作需要确认后才能继续。</p>
+      <div class="confirm-actions">
+        <button class="button" id="cancelInterrupt" type="button">取消操作</button>
+        <button class="button primary" id="confirmInterrupt" type="button">确认执行</button>
+      </div>
+    </div>
   </div>
 </body>
 </html>

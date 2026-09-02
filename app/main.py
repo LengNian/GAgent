@@ -10,7 +10,9 @@ from fastapi.staticfiles import StaticFiles
 from app.api.agent import agent_router
 from app.api.messages import router as messages_router
 from app.api.threads import router as threads_router
+from app.checkpoint import close_checkpointer, open_checkpointer
 from app.database import close_pool
+from app.settings import get_settings
 from app.observability import configure_logging
 from app.startup import validate_startup_configuration
 
@@ -30,9 +32,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     configure_logging()
     validate_startup_configuration()
+    await open_checkpointer(get_settings().database_url)
     try:
         yield
     finally:
+        await close_checkpointer()
         close_pool()
 
 

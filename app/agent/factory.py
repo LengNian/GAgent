@@ -11,6 +11,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, MessagesState, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
+from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
 from app.action_gateway import ActionResult
@@ -36,6 +37,7 @@ class RouteDecision(BaseModel):
 class AgentGraphState(MessagesState, total=False):
     """双 Agent 编排图共享的运行状态。"""
 
+    approval_rejected: bool
     target_agent: str
     intent: str
     entities: dict[str, Any]
@@ -249,6 +251,7 @@ def _create_domain_agent(
     agent_id: str,
     model: BaseChatModel,
     settings: Settings,
+    checkpointer: Any | None = None,
 ):
     """创建单个领域 Agent 图，供直接调用或 Supervisor 节点复用。
 
@@ -293,13 +296,14 @@ def _create_domain_agent(
         graph.add_edge("report", END)
     else:
         graph.add_edge("call_model", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 def _create_orchestrated_agent(
     *,
     model: BaseChatModel,
     settings: Settings,
+    checkpointer: Any | None = None,
 ):
     """创建 Supervisor -> Conversation/IoT 的 LangGraph 编排图。
 
@@ -323,6 +327,30 @@ def _create_orchestrated_agent(
         model=model,
         settings=settings,
     )
+
+    async def approval_demo(state: AgentGraphState) -> dict[str, object]:
+        """模拟副作用操作的人工确认中断，仅用于验证 checkpoint 恢复链路。"""
+
+        messages = state.get("messages", [])
+        latest = messages[-1] if messages else None
+        content = getattr(latest, "content", "")
+        if not isinstance(content, str) or "[模拟中断]" not in content:
+            return {}
+        decision = interrupt(
+            {
+                "type": "approval_required",
+                "action": "simulated_set_operation",
+                "message": "检测到模拟修改操作，请确认后继续。",
+            }
+        )
+        if decision is True or (isinstance(decision, dict) and decision.get("approved") is True):
+            return {}
+        return {"approval_rejected": True}
+
+    def route_after_approval(state: AgentGraphState) -> str:
+        """根据人工确认结果决定继续 Agent 或正常结束。"""
+
+        return END if state.get("approval_rejected") else "supervisor"
 
     async def call_supervisor(state: AgentGraphState) -> dict[str, object]:
         """调用 Supervisor 并保存结构化路由字段，不把路由结果写入对话消息。"""
@@ -374,12 +402,18 @@ def _create_orchestrated_agent(
         return {"messages": result["messages"][-1:]}
 
     graph = StateGraph(AgentGraphState)
+    graph.add_node("approval_demo", approval_demo)
     graph.add_node("supervisor", call_supervisor)
     graph.add_node("conversation_agent", call_conversation)
     graph.add_node("iot_agent", call_iot)
 
 
-    graph.add_edge(START, "supervisor")
+    graph.add_edge(START, "approval_demo")
+    graph.add_conditional_edges(
+        "approval_demo",
+        route_after_approval,
+        {"supervisor": "supervisor", END: END},
+    )
     graph.add_conditional_edges(
         "supervisor",
         route_to_agent,
@@ -390,7 +424,7 @@ def _create_orchestrated_agent(
     )
     graph.add_edge("conversation_agent", END)
     graph.add_edge("iot_agent", END)
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 def create_agent(
@@ -398,6 +432,7 @@ def create_agent(
     agent_id: str | None = None,
     model: BaseChatModel | None = None,
     settings: Settings | None = None,
+    checkpointer: Any | None = None,
 ):
     """创建编排图或指定的单领域 Agent 图。
 
@@ -405,6 +440,7 @@ def create_agent(
         agent_id: 传入时创建指定领域 Agent；不传入时创建 Supervisor 编排图。
         model: 可选的注入模型，便于测试和替换模型实现。
         settings: 可选的已校验配置；未传入时加载默认配置。
+        checkpointer: 可选的 LangGraph checkpoint 持久化器。
     Returns:
         已编译的 LangGraph 图。
     """
@@ -416,5 +452,8 @@ def create_agent(
             agent_id=agent_id,
             model=chat_model,
             settings=resolved_settings,
+            checkpointer=checkpointer,
         )
-    return _create_orchestrated_agent(model=chat_model, settings=resolved_settings)
+    return _create_orchestrated_agent(
+        model=chat_model, settings=resolved_settings, checkpointer=checkpointer
+    )

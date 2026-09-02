@@ -10,8 +10,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from app import database
 from app.api.agent import _auth_data_from_payload, _user_id_from_auth_data
-from app.api.schemas.messages import ChatRequest, MessageResponse
-from app.services.chat_service import active_threads, active_threads_lock, release_active_thread, stream_reply
+from app.api.schemas.messages import ChatRequest, MessageResponse, ResumeRequest
+from app.checkpoint import get_checkpointer
+from app.services.chat_service import active_threads, active_threads_lock, release_active_thread, resume_command, stream_reply
 
 router = APIRouter(prefix="/api/threads", tags=["messages"])
 
@@ -109,4 +110,28 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
             "X-Accel-Buffering": "no",
             "X-Trace-Id": trace_id,
         },
+    )
+
+
+@router.post("/{thread_id}/resume")
+async def resume_chat(thread_id: UUID, request: ResumeRequest) -> StreamingResponse:
+    """恢复当前会话最近一次人工确认中断。"""
+
+    if get_checkpointer() is None:
+        raise HTTPException(status_code=503, detail="Checkpoint is not configured")
+    async with active_threads_lock:
+        if thread_id in active_threads:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Thread is already running")
+        active_threads.add(thread_id)
+    trace_id = str(uuid4())
+    return StreamingResponse(
+        stream_reply(
+            thread_id,
+            [],
+            trace_id,
+            _user_id_from_auth_data(_auth_data_from_payload(None)),
+            input_value=resume_command(request.approved, request.reason),
+        ),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Trace-Id": trace_id},
     )

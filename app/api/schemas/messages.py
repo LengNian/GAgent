@@ -26,3 +26,10 @@ class ChatRequest(BaseModel):
         if not value:
             raise ValueError("content must not be blank")
         return value
+
+
+class ResumeRequest(BaseModel):
+    """恢复人工确认中断的请求模型。"""
+
+    approved: bool
+    reason: str | None = None

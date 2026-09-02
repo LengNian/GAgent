@@ -1,6 +1,5 @@
-"""创建会话和流式返回 Agent 回复的 HTTP 接口。"""
+"""会话 CRUD 接口。"""
 
-import logging
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -9,11 +8,6 @@ from fastapi import APIRouter, Body, HTTPException, status
 from app.api.agent import _DEFAULT_AUTH_DATA, _auth_data_from_payload, _user_id_from_auth_data
 from app.api.schemas.threads import ThreadCreatedResponse, ThreadSummaryResponse, ThreadTitleRequest
 from app import database
-
-
-logger = logging.getLogger(__name__)
-
-
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 
 
@@ -39,14 +33,19 @@ async def create_thread(payload: dict[str, Any] | None = Body(default=None)) -> 
 
 
 @router.get("", response_model=list[ThreadSummaryResponse])
-async def list_user_threads(payload: dict[str, Any] | None = Body(default=None)):
+async def list_user_threads(payload: dict[str, Any] | None = Body(default=None)) -> list[ThreadSummaryResponse]:
     """返回当前用户的会话列表。"""
     user_id = _user_id_from_auth_data(_auth_data_from_payload(payload))
     try:
         rows = await to_thread.run_sync(database.list_threads, user_id)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    return [ThreadSummaryResponse(thread_id=row[0], title=row[1], title_is_custom=row[2], updated_at=row[3].isoformat()) for row in rows]
+    return [
+        ThreadSummaryResponse(
+            thread_id=row[0], title=row[1], title_is_custom=row[2], updated_at=row[3].isoformat()
+        )
+        for row in rows
+    ]
 
 
 @router.patch("/{thread_id}")
