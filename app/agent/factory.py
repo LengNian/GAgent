@@ -15,6 +15,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
 from app.action_gateway import ActionResult
+from app.ontology import get_action_registry
 from app.prompt_loader import get_agent_prompt, get_report_prompt
 from app.agent_manifest import get_agent_manifest
 from app.settings import Settings, get_settings
@@ -37,7 +38,6 @@ class RouteDecision(BaseModel):
 class AgentGraphState(MessagesState, total=False):
     """双 Agent 编排图共享的运行状态。"""
 
-    approval_rejected: bool
     target_agent: str
     intent: str
     entities: dict[str, Any]
@@ -164,17 +164,30 @@ async def _summarize_successful_action_result(
     result: ActionResult,
     model: BaseChatModel,
 ) -> str:
-    """使用独立报告模型总结已确认成功的 ActionResult。
+    """使用独立报告模型总结成功或失败的 ActionResult。
 
     逻辑规划：
-    1. 仅将 Action 名称和 data 作为事实输入交给 Report Prompt。
+    1. 仅将 Action 状态、名称和安全结果字段交给 Report Prompt。
     2. 不绑定任何工具，阻止报告模型继续执行 Action。
-    3. 模型异常或返回空文本时使用不回显原始数据的安全提示。
+    3. 模型异常或返回空文本时使用安全兜底提示。
     """
 
     report_input = json.dumps(
-        {"action_name": result.action_name, "data": result.data},
+        {
+            "ok": result.ok,
+            "action_name": result.action_name,
+            "data": result.data if result.ok else None,
+            "error_code": result.error_code if not result.ok else None,
+            "error_type": result.error_type if not result.ok else None,
+            "message": result.message if not result.ok else None,
+            "details": result.details if not result.ok else {},
+        },
         ensure_ascii=False,
+    )
+    fallback = (
+        _failure_report_message(result)
+        if not result.ok
+        else "设备查询已完成，但结果摘要生成失败，请稍后重试。"
     )
     try:
         response = await model.ainvoke(
@@ -185,12 +198,12 @@ async def _summarize_successful_action_result(
         )
     except Exception:
         logger.exception("Report model invocation failed for action %s", result.action_name)
-        return "设备查询已完成，但结果摘要生成失败，请稍后重试。"
+        return fallback
 
     summary = getattr(response, "content", "")
     if isinstance(summary, str) and summary.strip():
         return summary.strip()
-    return "设备查询已完成，但结果摘要生成失败，请稍后重试。"
+    return fallback
 
 
 # 倒着找最后一个ToolMessage，然后解析它的content
@@ -202,7 +215,7 @@ async def _report_message_for_messages(
 
     逻辑规划：
     1. 从尾部查找 ToolMessage，确保只消费 ToolNode 的实际输出。
-    2. 失败结果走确定性文案，成功结果交给无工具的报告模型总结。
+    2. 成功和失败结果都交给报告模型总结，模型不可用时使用安全兜底文案。
     3. 没有工具结果或结果无法解析时返回保守提示，不回显原始内容。
     """
 
@@ -211,8 +224,6 @@ async def _report_message_for_messages(
             result = _action_result_from_tool_content(message.content)
             if result is None:
                 return "工具返回结果异常，无法确认本次设备查询是否完成。"
-            if not result.ok:
-                return _failure_report_message(result)
             return await _summarize_successful_action_result(result, model)
     return "未收到工具执行结果，无法确认本次设备查询是否完成。"
 
@@ -270,6 +281,7 @@ def _create_domain_agent(
 
     tools = build_tools_for_agent(settings, agent_id)
     model_with_tools = model.bind_tools(tools) if tools else model
+    action_registry = get_action_registry()
 
     async def call_model(state: MessagesState) -> dict[str, list[Any]]:
         """调用领域模型并追加一条模型消息。"""
@@ -286,7 +298,7 @@ def _create_domain_agent(
         3. 追加最终 AIMessage 并结束子图，阻止工具调用后的模型二次生成。
         """
         if state.get("approval_rejected"):
-            return {"messages": [AIMessage(content="操作已取消。")]}
+            return {"messages": [AIMessage(content="操作已取消，未执行相关工具。")]}
         report_message = await _report_message_for_messages(
             state.get("messages", []),
             model,
@@ -294,40 +306,56 @@ def _create_domain_agent(
         return {"messages": [AIMessage(content=report_message)]}
 
     async def approval_gate(state: DomainGraphState) -> dict[str, object]:
-        """在领域工具执行前处理中断，并记录人工拒绝结果。"""
+        """在需要确认的 Action 执行前暂停领域子图。"""
 
         messages = state.get("messages", [])
         latest = messages[-1] if messages else None
-        content = getattr(latest, "content", "")
-        if not isinstance(content, str) or "[模拟中断]" not in content:
-            return {}
+        tool_calls = getattr(latest, "tool_calls", []) or []
+        pending_actions = []
+        for tool_call in tool_calls:
+            action_name = tool_call.get("name") if isinstance(tool_call, dict) else None
+            if not isinstance(action_name, str):
+                continue
+            action = action_registry.get(action_name)
+            if action.requires_confirmation:
+                pending_actions.append(
+                    {
+                        "action_name": action.name,
+                        "risk_level": action.risk_level,
+                        "description": action.description,
+                    }
+                )
         decision = interrupt(
             {
                 "type": "approval_required",
-                "action": f"{agent_id}_operation",
-                "message": "检测到可能产生修改的操作，请确认后继续。",
+                "agent_id": agent_id,
+                "actions": pending_actions,
+                "message": "该操作需要人工确认，请确认后继续。",
             }
         )
-        if decision is True or (isinstance(decision, dict) and decision.get("approved") is True):
-            return {}
-        return {"approval_rejected": True}
+        approved = decision is True or (
+            isinstance(decision, dict) and decision.get("approved") is True
+        )
+        return {} if approved else {"approval_rejected": True}
 
     def route_after_model(state: DomainGraphState) -> str:
-        """模型完成判断后决定是否进入审批节点或直接结束。"""
+        """根据工具调用对应的 Action 元数据决定下一节点。"""
 
-        latest = state.get("messages", [])[-1:] or [None]
-        message = latest[0]
-        content = getattr(message, "content", "")
-        has_simulated_interrupt = isinstance(content, str) and "[模拟中断]" in content
-        return "approval_gate" if has_simulated_interrupt else ("tools" if getattr(message, "tool_calls", []) else END)
+        messages = state.get("messages", [])
+        latest = messages[-1] if messages else None
+        tool_calls = getattr(latest, "tool_calls", []) or []
+        if not tool_calls:
+            return END
+        for tool_call in tool_calls:
+            action_name = tool_call.get("name") if isinstance(tool_call, dict) else None
+            if isinstance(action_name, str) and action_registry.get(action_name).requires_confirmation:
+                return "approval_gate"
+        return "tools"
 
     def route_after_approval(state: DomainGraphState) -> str:
-        """根据审批结果决定执行工具或结束当前领域子图。"""
+        """根据人工确认结果决定调用工具或交由报告节点结束。"""
 
-        if state.get("approval_rejected"):
-            return "report"
-        latest = state.get("messages", [])[-1:] or [None]
-        return "tools" if getattr(latest[0], "tool_calls", []) else END
+        return "report" if state.get("approval_rejected") else "tools"
 
     graph = StateGraph(DomainGraphState)
     graph.add_node("call_model", call_model)
@@ -344,7 +372,7 @@ def _create_domain_agent(
         graph.add_conditional_edges(
             "approval_gate",
             route_after_approval,
-            {"tools": "tools", "report": "report", END: END},
+            {"tools": "tools", "report": "report"},
         )
         graph.add_edge("tools", "report")
         graph.add_edge("report", END)
@@ -411,36 +439,10 @@ def _create_orchestrated_agent(
             raise ValueError(f"Supervisor returned unsupported target agent: {target_agent}")
         return target_agent
 
-    async def call_conversation(state: AgentGraphState) -> dict[str, list[Any]]:
-        """执行 Conversation Agent 子图。"""
-
-        result = await _invoke_domain_graph(
-            agent_id="conversation_agent",
-            graph=conversation_graph,
-            messages=state["messages"],
-        )
-        return {
-            "messages": result["messages"][-1:],
-            "approval_rejected": bool(result.get("approval_rejected")),
-        }
-
-    async def call_iot(state: AgentGraphState) -> dict[str, list[Any]]:
-        """执行 IoT Agent 子图。"""
-
-        result = await _invoke_domain_graph(
-            agent_id="iot_agent",
-            graph=iot_graph,
-            messages=state["messages"],
-        )
-        return {
-            "messages": result["messages"][-1:],
-            "approval_rejected": bool(result.get("approval_rejected")),
-        }
-
     graph = StateGraph(AgentGraphState)
     graph.add_node("supervisor", call_supervisor)
-    graph.add_node("conversation_agent", call_conversation)
-    graph.add_node("iot_agent", call_iot)
+    graph.add_node("conversation_agent", conversation_graph)
+    graph.add_node("iot_agent", iot_graph)
 
 
     graph.add_edge(START, "supervisor")
