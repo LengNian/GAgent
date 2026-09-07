@@ -163,6 +163,36 @@ async def _stream_reply(
         checkpointer = get_checkpointer()
         agent = create_agent(checkpointer=checkpointer) if checkpointer else create_agent()
         config = {"configurable": {"thread_id": str(thread_id)}}
+
+
+        if checkpointer is not None:
+            checkpoint = await checkpointer.aget_tuple(config)
+            if checkpoint is not None:
+                channel_values = checkpoint.checkpoint.get("channel_values", {})
+                checkpoint_messages = channel_values.get("messages", [])
+
+                print("=== checkpoint messages ===")
+                for index, message in enumerate(checkpoint_messages, start=1):
+                    print(
+                        index,
+                        type(message).__name__,
+                        repr(getattr(message, "content", None)),
+                    )
+
+        print("=== input messages ===")
+        for index, message in enumerate(messages, start=1):
+            print(
+                index,
+                type(message).__name__,
+                repr(getattr(message, "content", None)),
+            )
+
+
+
+
+
+
+
         graph_input = input_value if input_value is not None else {"messages": messages}
         event_stream = (
             agent.astream_events(graph_input, config=config, version="v2")

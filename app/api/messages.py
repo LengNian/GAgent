@@ -103,13 +103,20 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
             await release_active_thread(thread_id)
             raise HTTPException(status_code=503, detail=str(error)) from error
     messages.append(HumanMessage(content=request.content))
-    settings = get_settings()
-    compilation = ContextCompiler(
-        max_tokens=settings.context_max_tokens,
-        max_message_tokens=settings.context_max_message_tokens,
-        max_messages=settings.context_max_messages,
-        token_counter=create_token_counter(settings),
-    ).compile(messages)
+    try:
+        settings = get_settings()
+        compilation = ContextCompiler(
+            max_tokens=settings.context_max_tokens,
+            max_message_tokens=settings.context_max_message_tokens,
+            max_messages=settings.context_max_messages,
+            token_counter=create_token_counter(settings),
+        ).compile(messages)
+    except ValueError as error:
+        await release_active_thread(thread_id)
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RuntimeError as error:
+        await release_active_thread(thread_id)
+        raise HTTPException(status_code=503, detail=str(error)) from error
     trace_id = str(uuid4())
     return StreamingResponse(
         stream_reply(thread_id, compilation.messages, trace_id, user_id),

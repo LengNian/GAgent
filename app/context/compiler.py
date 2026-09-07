@@ -109,21 +109,16 @@ class ContextCompiler:
         if not messages:
             return ContextCompilation([], 0, 0, 0, 0)
 
-        # 已选中的信息（倒序）
-        selected: list[BaseMessage] = []
-        # 已选中的 token 数
-        selected_tokens = 0
-        # 被截断的消息条数
-        truncated_count = 0
-        # 丢弃的用户数量
-        dropped_user_count = 0
-        # 丢弃的助手数量
-        dropped_assistant_count = 0
-        # 原始信息副本
+
+        # 候选按最新到最旧保存；每项同时保留原始索引，便于最终统计丢弃数量。
+        # (消息对象, 在原始列表中的下标, 是否被截断过)
+        selected_entries: list[tuple[BaseMessage, int, bool]] = []
+        # 累计选择的token
+        estimated_tokens = 0
         remaining_messages = list(messages)
-
-
+        # index 从最后一条向0递减
         index = len(remaining_messages) - 1
+
         while index >= 0:
             latest_message = remaining_messages[index]
             if isinstance(latest_message, AIMessage) and index > 0 and isinstance(
@@ -136,54 +131,94 @@ class ContextCompiler:
                 candidate_indices = [index]
             else:
                 # 孤立 assistant 或未知消息不会遮挡更早的用户意图。
-                if isinstance(latest_message, AIMessage):
-                    dropped_assistant_count += 1
                 index -= 1
                 continue
 
-            prepared_messages: list[BaseMessage] = []
-            candidate_truncated = 0
-            for candidate in candidate_messages:
-                prepared, was_truncated = self._fit_message(candidate)
-                prepared_messages.append(prepared)
-                candidate_truncated += int(was_truncated)
-            prospective_messages = list(reversed([*selected, *reversed(prepared_messages)]))
-            candidate_tokens = self.token_counter.count_messages(prospective_messages)
+            if index == len(remaining_messages) - 1 and isinstance(latest_message, HumanMessage):
+                # 当前问题一次满足单条和完整 chat template 预算，确保不会被历史挤掉。
+                prepared_current, _ = self._fit_current_message(latest_message)
+                prepared_messages = [prepared_current]
+            else:
+                prepared_messages = []
+                for candidate in candidate_messages:
+                    prepared, _ = self._fit_message(candidate)
+                    prepared_messages.append(prepared)
+            
+
+            candidate_text_tokens = sum(
+                self.token_counter.count_message(message) for message in prepared_messages
+            )
             if (
-                len(selected) + len(prepared_messages) > self.max_messages
-                or candidate_tokens > self.max_tokens
+                len(selected_entries) + len(prepared_messages) > self.max_messages
+                or estimated_tokens + candidate_text_tokens > self.max_tokens
             ):
-                # 用户消息是锚点；最近候选放不下时，不能跳过它再选择更老历史。
-                dropped_user_count += sum(
-                    isinstance(remaining_messages[item], HumanMessage) for item in candidate_indices
-                )
-                dropped_assistant_count += sum(
-                    isinstance(remaining_messages[item], AIMessage) for item in candidate_indices
-                )
-                for item in range(index - len(candidate_indices) + 1):
-                    dropped_user_count += isinstance(remaining_messages[item], HumanMessage)
-                    dropped_assistant_count += isinstance(remaining_messages[item], AIMessage)
                 break
 
-            # 候选从尾部收集，先追加 assistant 再追加 user，整体反转后恢复原始顺序。
-            selected.extend(reversed(prepared_messages))
-            selected_tokens = candidate_tokens
-            truncated_count += candidate_truncated
+            for prepared, original_index in reversed(list(zip(prepared_messages, candidate_indices))):
+                selected_entries.append(
+                    (prepared, original_index, prepared != remaining_messages[original_index])
+                )
+            estimated_tokens += candidate_text_tokens
             index -= len(candidate_indices)
 
-        selected.reverse()
+        selected = [entry[0] for entry in reversed(selected_entries)]
+        # 对快速筛选结果做完整模板校验；若超限，二分定位可保留的最近窗口。
+        if self.token_counter.count_messages(selected) > self.max_tokens:
+            lower_bound = 1
+            upper_bound = len(selected_entries)
+            retained_count = 1
+            while lower_bound <= upper_bound:
+                midpoint = (lower_bound + upper_bound) // 2
+                candidate = [entry[0] for entry in reversed(selected_entries[:midpoint])]
+                if self.token_counter.count_messages(candidate) <= self.max_tokens:
+                    retained_count = midpoint
+                    lower_bound = midpoint + 1
+                else:
+                    upper_bound = midpoint - 1
+
+            # 从最新向最旧保存时，AIMessage 后面必须紧邻其对应 HumanMessage。
+            if retained_count > 1 and isinstance(selected_entries[retained_count - 1][0], AIMessage):
+                retained_count -= 1
+            selected_entries = selected_entries[:retained_count]
+            selected = [entry[0] for entry in reversed(selected_entries)]
+        selected_indices = {original_index for _, original_index, _ in selected_entries}
+        dropped_user_count = sum(
+            isinstance(message, HumanMessage)
+            for item, message in enumerate(remaining_messages)
+            if item not in selected_indices
+        )
+        dropped_assistant_count = sum(
+            isinstance(message, AIMessage)
+            for item, message in enumerate(remaining_messages)
+            if item not in selected_indices
+        )
+        selected_tokens = self.token_counter.count_messages(selected) if selected else 0
+
+
+        print("\n###########################################################")
+        print("tokens:", selected_tokens)
+        print(selected)
+        print("###########################################################\n")
+
+
         return ContextCompilation(
             messages=selected,
             estimated_tokens=selected_tokens,
             original_message_count=original_count,
             dropped_message_count=original_count - len(selected),
-            truncated_message_count=truncated_count,
+            truncated_message_count=sum(was_truncated for _, _, was_truncated in selected_entries),
             dropped_user_message_count=dropped_user_count,
             dropped_assistant_message_count=dropped_assistant_count,
         )
 
+
+
+    # _fit_message和_fit_current_message两个截断方法
     def _fit_message(self, message: BaseMessage) -> tuple[BaseMessage, bool]:
-        """将单条文本消息限制在消息预算内，保持消息类型和元数据。"""
+        """
+            将单条文本消息限制在消息预算内，保持消息类型和元数据。
+            约束：正文 ≤ min(max_message_tokens, max_tokens)
+        """
 
         if isinstance(message.content, str):
             content_text = message.content
@@ -195,8 +230,10 @@ class ContextCompiler:
             )
         else:
             content_text = str(message.content)
-            
+
+        # 预算上限
         message_limit = min(self.max_message_tokens, self.max_tokens)
+
         if self.token_counter.count_text(content_text) <= message_limit:
             return message, False
 
@@ -217,3 +254,44 @@ class ContextCompiler:
                 upper_bound = midpoint - 1
         truncated = content_text[:lower_bound] + marker
         return message.model_copy(update={"content": truncated}), True
+
+
+    def _fit_current_message(self, message: HumanMessage) -> tuple[HumanMessage, bool]:
+        """
+        一次满足当前问题的单条正文和完整聊天模板预算。
+        约束：正文 ≤ message_limit 且 完整模板 ≤ max_tokens
+        """
+
+        if not isinstance(message.content, str):
+            fitted, was_truncated = self._fit_message(message)
+            if self.token_counter.count_messages([fitted]) > self.max_tokens:
+                raise ValueError("max_tokens is too small for the current message template")
+            return fitted, was_truncated  # type: ignore[return-value]
+
+        message_limit = min(self.max_message_tokens, self.max_tokens)
+        if (
+            self.token_counter.count_text(message.content) <= message_limit
+            and self.token_counter.count_messages([message]) <= self.max_tokens
+        ):
+            return message, False
+
+        marker = "[内容已截断]"
+        lower_bound = 0
+        upper_bound = len(message.content)
+        while lower_bound < upper_bound:
+            midpoint = (lower_bound + upper_bound + 1) // 2
+            candidate = message.model_copy(update={"content": message.content[:midpoint] + marker})
+            if (
+                self.token_counter.count_text(candidate.content) <= message_limit
+                and self.token_counter.count_messages([candidate]) <= self.max_tokens
+            ):
+                lower_bound = midpoint
+            else:
+                upper_bound = midpoint - 1
+        fitted = message.model_copy(update={"content": message.content[:lower_bound] + marker})
+        if (
+            self.token_counter.count_text(fitted.content) > message_limit
+            or self.token_counter.count_messages([fitted]) > self.max_tokens
+        ):
+            raise ValueError("max_tokens is too small for the current message template")
+        return fitted, True
