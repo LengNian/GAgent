@@ -3,13 +3,15 @@
 import asyncio
 import json
 import logging
-from typing import Any, Literal, TypedDict
+from typing import Annotated, Any, Literal, TypedDict
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
-from langgraph.graph import END, START, MessagesState, StateGraph
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
@@ -35,9 +37,11 @@ class RouteDecision(BaseModel):
     decision_summary: str = Field(min_length=1, max_length=160)
 
 
-class AgentGraphState(MessagesState, total=False):
+class AgentGraphState(TypedDict, total=False):
     """双 Agent 编排图共享的运行状态。"""
 
+    context_messages: list[Any]
+    execution_messages: Annotated[list[Any], add_messages]
     target_agent: str
     intent: str
     entities: dict[str, Any]
@@ -45,9 +49,11 @@ class AgentGraphState(MessagesState, total=False):
     decision_summary: str
 
 
-class DomainGraphState(MessagesState, total=False):
+class DomainGraphState(TypedDict, total=False):
     """可复用领域子图的运行状态。"""
 
+    context_messages: list[Any]
+    execution_messages: Annotated[list[Any], add_messages]
     approval_rejected: bool
 
 
@@ -75,10 +81,16 @@ def _build_model(settings: Settings) -> BaseChatModel:
     return ChatOpenAI(**model_kwargs)
 
 
-def _messages_with_prompt(agent_id: str, state: MessagesState) -> list[Any]:
+def _messages_with_prompt(agent_id: str, state: AgentGraphState | DomainGraphState) -> list[Any]:
     """为指定 Agent 组装系统 Prompt 和当前消息。"""
 
-    return [SystemMessage(content=get_agent_prompt(agent_id)), *state["messages"]]
+    context_messages = state.get("context_messages", [])
+    execution_messages = state.get("execution_messages", [])
+    return [
+        SystemMessage(content=get_agent_prompt(agent_id)),
+        *context_messages,
+        *execution_messages,
+    ]
 
 
 # 把ToolMessage里的内容统一解析为Python dict    
@@ -246,7 +258,10 @@ async def _invoke_domain_graph(
     try:
         async with asyncio.timeout(runtime.timeout_seconds):
             return await graph.ainvoke(
-                {"messages": messages},
+                {
+                    "context_messages": messages,
+                    "execution_messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
+                },
                 config={"recursion_limit": runtime.max_steps},
             )
     except TimeoutError as error:
@@ -283,11 +298,11 @@ def _create_domain_agent(
     model_with_tools = model.bind_tools(tools) if tools else model
     action_registry = get_action_registry()
 
-    async def call_model(state: MessagesState) -> dict[str, list[Any]]:
+    async def call_model(state: DomainGraphState) -> dict[str, list[Any]]:
         """调用领域模型并追加一条模型消息。"""
 
         response = await model_with_tools.ainvoke(_messages_with_prompt(agent_id, state))
-        return {"messages": [response]}
+        return {"execution_messages": [response]}
 
     async def report(state: DomainGraphState) -> dict[str, list[Any]]:
         """根据实际工具结果生成确定性最终报告。
@@ -298,17 +313,17 @@ def _create_domain_agent(
         3. 追加最终 AIMessage 并结束子图，阻止工具调用后的模型二次生成。
         """
         if state.get("approval_rejected"):
-            return {"messages": [AIMessage(content="操作已取消，未执行相关工具。")]}
+            return {"execution_messages": [AIMessage(content="操作已取消，未执行相关工具。")]}
         report_message = await _report_message_for_messages(
-            state.get("messages", []),
+            state.get("execution_messages", []),
             model,
         )
-        return {"messages": [AIMessage(content=report_message)]}
+        return {"execution_messages": [AIMessage(content=report_message)]}
 
     async def approval_gate(state: DomainGraphState) -> dict[str, object]:
         """在需要确认的 Action 执行前暂停领域子图。"""
 
-        messages = state.get("messages", [])
+        messages = state.get("execution_messages", [])
         latest = messages[-1] if messages else None
         tool_calls = getattr(latest, "tool_calls", []) or []
         pending_actions = []
@@ -341,7 +356,7 @@ def _create_domain_agent(
     def route_after_model(state: DomainGraphState) -> str:
         """根据工具调用对应的 Action 元数据决定下一节点。"""
 
-        messages = state.get("messages", [])
+        messages = state.get("execution_messages", [])
         latest = messages[-1] if messages else None
         tool_calls = getattr(latest, "tool_calls", []) or []
         if not tool_calls:
@@ -361,7 +376,7 @@ def _create_domain_agent(
     graph.add_node("call_model", call_model)
     graph.add_edge(START, "call_model")
     if tools:
-        graph.add_node("tools", ToolNode(tools))
+        graph.add_node("tools", ToolNode(tools, messages_key="execution_messages"))
         graph.add_node("report", report)
         graph.add_node("approval_gate", approval_gate)
         graph.add_conditional_edges(

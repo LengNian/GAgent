@@ -195,10 +195,10 @@ class ContextCompiler:
         selected_tokens = self.token_counter.count_messages(selected) if selected else 0
 
 
-        print("\n###########################################################")
-        print("tokens:", selected_tokens)
-        print(selected)
-        print("###########################################################\n")
+        # print("\n###########################################################")
+        # print("tokens:", selected_tokens)
+        # print(selected)
+        # print("###########################################################\n")
 
 
         return ContextCompilation(

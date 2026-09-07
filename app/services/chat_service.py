@@ -6,7 +6,8 @@ import logging
 from uuid import UUID
 
 from anyio import to_thread
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, RemoveMessage
+from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 from langgraph.errors import GraphInterrupt
 
@@ -67,14 +68,14 @@ def _report_output_text(output: object) -> str:
     """从 Report Node 的状态输出中提取最终助手文本。
 
     逻辑规划：
-    1. 只接受包含 messages 列表的节点状态输出。
+    1. 只接受包含 execution_messages 列表的节点状态输出。
     2. 读取最后一条消息，因为 Report Node 只追加一条最终报告消息。
     3. 复用消息文本提取逻辑；未知结构返回空文本，不发送伪造 SSE 内容。
     """
 
     if not isinstance(output, dict):
         return ""
-    messages = output.get("messages")
+    messages = output.get("execution_messages")
     if not isinstance(messages, list) or not messages:
         return ""
     return _chunk_text(messages[-1])
@@ -163,42 +164,21 @@ async def _stream_reply(
         checkpointer = get_checkpointer()
         agent = create_agent(checkpointer=checkpointer) if checkpointer else create_agent()
         config = {"configurable": {"thread_id": str(thread_id)}}
-
-
-        if checkpointer is not None:
-            checkpoint = await checkpointer.aget_tuple(config)
-            if checkpoint is not None:
-                channel_values = checkpoint.checkpoint.get("channel_values", {})
-                checkpoint_messages = channel_values.get("messages", [])
-
-                print("=== checkpoint messages ===")
-                for index, message in enumerate(checkpoint_messages, start=1):
-                    print(
-                        index,
-                        type(message).__name__,
-                        repr(getattr(message, "content", None)),
-                    )
-
-        print("=== input messages ===")
-        for index, message in enumerate(messages, start=1):
-            print(
-                index,
-                type(message).__name__,
-                repr(getattr(message, "content", None)),
-            )
-
-
-
-
-
-
-
-        graph_input = input_value if input_value is not None else {"messages": messages}
+        # 上下文只属于本次请求；执行消息单独保存，resume 时由 checkpoint 恢复。
+        graph_input = (
+            input_value
+            if input_value is not None
+            else {
+                "context_messages": messages,
+                "execution_messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
+            }
+        )
         event_stream = (
             agent.astream_events(graph_input, config=config, version="v2")
             if checkpointer
             else agent.astream_events(graph_input, version="v2")
         )
+
         interrupted = False
         async for event in event_stream:
 

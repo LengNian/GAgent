@@ -32,5 +32,5 @@ actions:
     effects:
       - 返回目标设备的只读状态信息。
     risk_level: low
-    requires_confirmation: false
+    requires_confirmation: true
     executor: query_device_by_ip
