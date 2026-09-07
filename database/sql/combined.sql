@@ -70,6 +70,7 @@ CREATE TABLE aiagent.thread_summaries (
   summary         TEXT NOT NULL CHECK (btrim(summary) <> ''),
   covered_to_seq  BIGINT NOT NULL CHECK (covered_to_seq > 0),
   summary_version INT NOT NULL DEFAULT 1 CHECK (summary_version > 0),
+  summary_token_count INT NOT NULL DEFAULT 0 CHECK (summary_token_count >= 0),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
   FOREIGN KEY (thread_id, covered_to_seq)

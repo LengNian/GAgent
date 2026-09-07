@@ -163,6 +163,7 @@ CREATE TABLE aiagent.aiagent_thread_summaries (
     summary         TEXT        NOT NULL,
     covered_to_seq  BIGINT      NOT NULL,
     summary_version INT         NOT NULL DEFAULT 1,         -- 摘要版本号
+    summary_token_count INT     NOT NULL DEFAULT 0,         -- 摘要 token 数量
     created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT pk_aiagent_thread_summaries PRIMARY KEY (thread_id),
@@ -172,11 +173,13 @@ CREATE TABLE aiagent.aiagent_thread_summaries (
         REFERENCES aiagent.aiagent_messages (thread_id, seq) ON DELETE CASCADE,
     CONSTRAINT chk_aiagent_thread_summaries_summary CHECK (btrim(summary) <> ''),
     CONSTRAINT chk_aiagent_thread_summaries_covered_seq CHECK (covered_to_seq > 0),
-    CONSTRAINT chk_aiagent_thread_summaries_version CHECK (summary_version > 0)
+    CONSTRAINT chk_aiagent_thread_summaries_version CHECK (summary_version > 0),
+    CONSTRAINT chk_aiagent_thread_summaries_token_count CHECK (summary_token_count >= 0)
 );
 
 COMMENT ON TABLE aiagent.aiagent_thread_summaries IS '会话摘要表：每个会话最多一条当前摘要，covered_to_seq 表示摘要覆盖到的最后一条业务消息序号，并通过复合外键保证该消息存在';
 COMMENT ON COLUMN aiagent.aiagent_thread_summaries.summary IS '压缩后的历史对话摘要，不能为空白';
+COMMENT ON COLUMN aiagent.aiagent_thread_summaries.summary_token_count IS '摘要占用的 token 数量，用于上下文预算控制';
 
 
 -- =============================================================================

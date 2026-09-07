@@ -12,6 +12,8 @@ from app import database
 from app.api.agent import _auth_data_from_payload, _user_id_from_auth_data
 from app.api.schemas.messages import ChatRequest, MessageResponse, ResumeRequest
 from app.checkpoint import get_checkpointer
+from app.context import ContextCompiler, create_token_counter
+from app.settings import get_settings
 from app.services.chat_service import active_threads, active_threads_lock, release_active_thread, resume_command, stream_reply
 
 router = APIRouter(prefix="/api/threads", tags=["messages"])
@@ -101,9 +103,16 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
             await release_active_thread(thread_id)
             raise HTTPException(status_code=503, detail=str(error)) from error
     messages.append(HumanMessage(content=request.content))
+    settings = get_settings()
+    compilation = ContextCompiler(
+        max_tokens=settings.context_max_tokens,
+        max_message_tokens=settings.context_max_message_tokens,
+        max_messages=settings.context_max_messages,
+        token_counter=create_token_counter(settings),
+    ).compile(messages)
     trace_id = str(uuid4())
     return StreamingResponse(
-        stream_reply(thread_id, messages, trace_id, user_id),
+        stream_reply(thread_id, compilation.messages, trace_id, user_id),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",

@@ -2,6 +2,8 @@
 
 from functools import lru_cache
 
+from typing import Literal
+
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -23,6 +25,23 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(validation_alias="LLM_TIMEOUT_SECONDS")
     nms_api_base_url: str = Field(validation_alias="NMS_API_BASE_URL")
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    context_max_tokens: int = Field(default=12000, validation_alias="CONTEXT_MAX_TOKENS", ge=1)
+    context_max_message_tokens: int = Field(
+        default=3000, validation_alias="CONTEXT_MAX_MESSAGE_TOKENS", ge=1
+    )
+    context_max_messages: int = Field(default=40, validation_alias="CONTEXT_MAX_MESSAGES", ge=1)
+    llm_tokenizer_backend: Literal["huggingface"] = Field(
+        default="huggingface", validation_alias="LLM_TOKENIZER_BACKEND"
+    )
+    llm_tokenizer_name: str = Field(
+        default="zai-org/GLM-4.5-Air", validation_alias="LLM_TOKENIZER_NAME", min_length=1
+    )
+    llm_tokenizer_revision: str | None = Field(
+        default=None, validation_alias="LLM_TOKENIZER_REVISION"
+    )
+    llm_tokenizer_trust_remote_code: bool = Field(
+        default=True, validation_alias="LLM_TOKENIZER_TRUST_REMOTE_CODE"
+    )
 
     @field_validator("nms_api_base_url")
     @classmethod
