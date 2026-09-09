@@ -52,6 +52,7 @@ DROP TABLE IF EXISTS aiagent.aiagent_knowledge_chunks;
 DROP TABLE IF EXISTS aiagent.aiagent_knowledge_documents;
 DROP TABLE IF EXISTS aiagent.aiagent_knowledge_bases;
 DROP TABLE IF EXISTS aiagent.aiagent_thread_summaries;
+DROP TABLE IF EXISTS aiagent.aiagent_thread_states;
 DROP TABLE IF EXISTS aiagent.aiagent_semantic_memories;
 DROP TABLE IF EXISTS aiagent.aiagent_long_term_memories;
 DROP TABLE IF EXISTS aiagent.aiagent_messages;
@@ -102,6 +103,23 @@ CREATE TABLE aiagent.aiagent_messages (
 COMMENT ON TABLE aiagent.aiagent_messages IS '消息表：保存页面需要展示的用户和助手文本，复合主键 (thread_id, seq)，会话删除时消息级联删除';
 COMMENT ON COLUMN aiagent.aiagent_messages.role IS '消息发送方角色，仅允许 user / assistant';
 COMMENT ON COLUMN aiagent.aiagent_messages.content IS '页面展示的消息正文，不能为空白';
+
+
+-- 会话任务状态：仅保存待确认 Action 等需要精确恢复的短期状态
+CREATE TABLE aiagent.aiagent_thread_states (
+    thread_id     UUID        NOT NULL,
+    state         JSONB       NOT NULL,
+    state_version INT         NOT NULL DEFAULT 1,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT pk_aiagent_thread_states PRIMARY KEY (thread_id),
+    CONSTRAINT fk_aiagent_thread_states_thread FOREIGN KEY (thread_id)
+        REFERENCES aiagent.aiagent_threads (thread_id) ON DELETE CASCADE,
+    CONSTRAINT chk_aiagent_thread_states_object CHECK (jsonb_typeof(state) = 'object'),
+    CONSTRAINT chk_aiagent_thread_states_version CHECK (state_version > 0)
+);
+
+COMMENT ON TABLE aiagent.aiagent_thread_states IS '会话级短期任务状态，仅保存待确认操作和审批状态，不替代 LangGraph checkpoint';
 
 
 -- =============================================================================
@@ -293,6 +311,8 @@ FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_semantic_memories_modify BEFORE UPDATE ON aiagent.aiagent_semantic_memories
 FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_thread_summaries_modify BEFORE UPDATE ON aiagent.aiagent_thread_summaries
+FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
+CREATE TRIGGER trg_aiagent_thread_states_modify BEFORE UPDATE ON aiagent.aiagent_thread_states
 FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_knowledge_bases_modify BEFORE UPDATE ON aiagent.aiagent_knowledge_bases
 FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();

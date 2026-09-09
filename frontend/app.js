@@ -526,6 +526,9 @@
     // [逻辑规划] 请求指定会话的历史消息；无权访问或会话不存在时从本地历史中移除。
     threadState.busy = true;
     threadState.pendingNew = false;
+    threadState.awaitingInterrupt = false;
+    interruptThreadId = null;
+    elements.interruptDialog.classList.add("hidden");
     setCurrentThread(threadId);
     updateHeader();
     updateUi();
@@ -552,9 +555,10 @@
         rememberThread(threadId, firstUserMessage ? firstUserMessage.content.slice(0, 32) : "新对话");
         render(false);
         setConnection("已连接", "会话已恢复。", "active");
+        return restorePendingInterrupt(threadId);
       })
       .catch(function (error) { showError(error.message || "无法恢复当前会话。"); })
-      .finally(function () { threadState.busy = false; updateUi(); });
+      .finally(function () { threadState.busy = threadState.awaitingInterrupt; updateUi(); });
   }
 
 
@@ -655,8 +659,28 @@
     setConnection("等待确认", "请先处理人工确认操作。", "active");
     updateUi();
     elements.interruptMessage.textContent = data.message || "该操作需要人工确认后才能继续。";
+    elements.cancelInterrupt.classList.toggle("hidden", data.approval_status === "approved");
     elements.interruptDialog.classList.remove("hidden");
     elements.confirmInterrupt.focus();
+  }
+
+  function restorePendingInterrupt(threadId) {
+    // [逻辑规划] 仅在当前会话仍处于 pending 时恢复弹窗，刷新页面不会自动执行或取消操作。
+    return fetch(apiUrl("/api/threads/" + encodeURIComponent(threadId) + "/task-state"))
+      .then(function (response) {
+        if (!response.ok) return responseError(response).then(function (message) { throw new Error(message); });
+        return response.json();
+      })
+      .then(function (taskState) {
+        if (threadState.threadId !== threadId || !taskState || ["pending", "approved"].indexOf(taskState.approval_status) === -1) return;
+        showInterrupt({
+          thread_id: threadId,
+          approval_status: taskState.approval_status,
+          message: taskState.approval_status === "approved"
+            ? "上一次操作已获批准但尚未完成，请继续执行或取消恢复。"
+            : "上一次操作尚待确认，请选择继续或取消。"
+        });
+      });
   }
 
   function resumeInterrupt(approved) {
@@ -877,9 +901,13 @@
   renderHistory();
   updateHeader();
   updateUi();
-  // 刷新页面时只展示已有会话列表，不自动创建或恢复会话；点击“新对话”后再创建。
-  setCurrentThread(null);
-  threadState.messages = [];
-  render(false);
+  var initialThreadId = new URL(window.location.href).searchParams.get("thread_id");
+  if (initialThreadId) {
+    loadThread(initialThreadId);
+  } else {
+    setCurrentThread(null);
+    threadState.messages = [];
+    render(false);
+  }
   loadServerHistory();
 })();

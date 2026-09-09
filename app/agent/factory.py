@@ -4,9 +4,12 @@ import asyncio
 import json
 import logging
 from typing import Annotated, Any, Literal, TypedDict
+from uuid import UUID
 
+from anyio import to_thread
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, RemoveMessage, SystemMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
@@ -16,7 +19,9 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
-from app.action_gateway import ActionResult
+from app import database
+from app.action_errors import ActionError
+from app.action_gateway import ActionGateway, ActionResult
 from app.ontology import get_action_registry
 from app.prompt_loader import get_agent_prompt, get_report_prompt
 from app.agent_manifest import get_agent_manifest
@@ -299,13 +304,67 @@ def _create_domain_agent(
     model_with_tools = model.bind_tools(tools) if tools else model
     action_registry = get_action_registry()
 
+    def _task_owner(config: RunnableConfig) -> tuple[UUID, str] | None:
+        """从不可见运行配置读取审批状态的会话归属。"""
+
+        configurable = config.get("configurable", {})
+        thread_id = configurable.get("thread_id") if isinstance(configurable, dict) else None
+        user_id = configurable.get("user_id") if isinstance(configurable, dict) else None
+        if not isinstance(thread_id, str) or not isinstance(user_id, str):
+            return None
+        try:
+            return UUID(thread_id), user_id
+        except ValueError:
+            return None
+
+    def _validated_pending_actions(state: DomainGraphState) -> list[dict[str, Any]]:
+        """提取通过 Action 契约和前置条件校验的待确认调用。"""
+
+        messages = state.get("execution_messages", [])
+        latest = messages[-1] if messages else None
+        tool_calls = getattr(latest, "tool_calls", []) or []
+        pending_actions: list[dict[str, Any]] = []
+        
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                continue
+            action_name = tool_call.get("name")
+            arguments = tool_call.get("args")
+            if not isinstance(action_name, str) or not isinstance(arguments, dict):
+                continue
+            try:
+                action = action_registry.get(action_name)
+                validated_arguments = ActionGateway._validate_arguments(action, arguments)
+                ActionGateway._validate_preconditions(action, validated_arguments)
+            except (ActionError, KeyError):
+                continue
+            if action.requires_confirmation:
+                pending_actions.append(
+                    {
+                        "action_name": action.name,
+                        "arguments": validated_arguments,
+                        "risk_level": action.risk_level,
+                        "description": action.description,
+                    }
+                )
+        return pending_actions
+
+    async def _finish_task(config: RunnableConfig, status: str) -> None:
+        """在最终报告生成后清除待确认 Action。"""
+
+        owner = _task_owner(config)
+        if owner is None:
+            return
+        thread_id, user_id = owner
+        await to_thread.run_sync(database.finish_thread_task, thread_id, user_id, status)
+
     async def call_model(state: DomainGraphState) -> dict[str, list[Any]]:
         """调用领域模型并追加一条模型消息。"""
 
         response = await model_with_tools.ainvoke(_messages_with_prompt(agent_id, state))
         return {"execution_messages": [response]}
 
-    async def report(state: DomainGraphState) -> dict[str, list[Any]]:
+    async def report(state: DomainGraphState, config: RunnableConfig) -> dict[str, list[Any]]:
         """根据实际工具结果生成确定性最终报告。
 
         逻辑规划：
@@ -314,33 +373,36 @@ def _create_domain_agent(
         3. 追加最终 AIMessage 并结束子图，阻止工具调用后的模型二次生成。
         """
         if state.get("approval_rejected"):
+            await _finish_task(config, "rejected")
             return {"execution_messages": [AIMessage(content="操作已取消，未执行相关工具。")]}
         report_message = await _report_message_for_messages(
             state.get("execution_messages", []),
             model,
         )
+        action_results = [
+            _action_result_from_tool_content(message.content)
+            for message in state.get("execution_messages", [])
+            if isinstance(message, ToolMessage)
+        ]
+        completed = action_results and all(result is not None and result.ok for result in action_results)
+        await _finish_task(config, "completed" if completed else "failed")
         return {"execution_messages": [AIMessage(content=report_message)]}
 
-    async def approval_gate(state: DomainGraphState) -> dict[str, object]:
+    async def approval_gate(state: DomainGraphState, config: RunnableConfig) -> dict[str, object]:
         """在需要确认的 Action 执行前暂停领域子图。"""
 
-        messages = state.get("execution_messages", [])
-        latest = messages[-1] if messages else None
-        tool_calls = getattr(latest, "tool_calls", []) or []
-        pending_actions = []
-        for tool_call in tool_calls:
-            action_name = tool_call.get("name") if isinstance(tool_call, dict) else None
-            if not isinstance(action_name, str):
-                continue
-            action = action_registry.get(action_name)
-            if action.requires_confirmation:
-                pending_actions.append(
-                    {
-                        "action_name": action.name,
-                        "risk_level": action.risk_level,
-                        "description": action.description,
-                    }
-                )
+        pending_actions = _validated_pending_actions(state)
+        owner = _task_owner(config)
+        if owner is not None:
+            thread_id, user_id = owner
+            persisted = await to_thread.run_sync(
+                database.set_pending_thread_actions,
+                thread_id,
+                user_id,
+                pending_actions,
+            )
+            if not persisted:
+                raise RuntimeError("Unable to persist pending action state")
         decision = interrupt(
             {
                 "type": "approval_required",
@@ -352,6 +414,20 @@ def _create_domain_agent(
         approved = decision is True or (
             isinstance(decision, dict) and decision.get("approved") is True
         )
+        reason = decision.get("reason") if isinstance(decision, dict) else None
+        if not isinstance(reason, str):
+            reason = None
+        if owner is not None:
+            thread_id, user_id = owner
+            resolved = await to_thread.run_sync(
+                database.resolve_thread_task_approval,
+                thread_id,
+                user_id,
+                approved,
+                reason,
+            )
+            if not resolved:
+                raise RuntimeError("Unable to resolve pending action state")
         return {} if approved else {"approval_rejected": True}
 
     def route_after_model(state: DomainGraphState) -> str:
@@ -362,10 +438,8 @@ def _create_domain_agent(
         tool_calls = getattr(latest, "tool_calls", []) or []
         if not tool_calls:
             return END
-        for tool_call in tool_calls:
-            action_name = tool_call.get("name") if isinstance(tool_call, dict) else None
-            if isinstance(action_name, str) and action_registry.get(action_name).requires_confirmation:
-                return "approval_gate"
+        if _validated_pending_actions(state):
+            return "approval_gate"
         return "tools"
 
     def route_after_approval(state: DomainGraphState) -> str:

@@ -168,7 +168,12 @@ async def _stream_reply(
 
         print_model_messages(messages)
 
-        config = {"configurable": {"thread_id": str(thread_id)}}
+        config = {
+            "configurable": {
+                "thread_id": str(thread_id),
+                "user_id": user_id,
+            }
+        }
         # 上下文只属于本次请求；执行消息单独保存，resume 时由 checkpoint 恢复。
         graph_input = (
             input_value

@@ -33,3 +33,10 @@ class ResumeRequest(BaseModel):
 
     approved: bool
     reason: str | None = None
+
+
+class PendingTaskStateResponse(BaseModel):
+    """供前端恢复人工确认弹窗的待处理任务状态。"""
+
+    approval_status: str
+    pending_actions: list[dict[str, object]]

@@ -10,8 +10,8 @@ def print_model_messages(messages: list[Any]) -> None:
 
     print("=== model messages ===", flush=True)
     for index, message in enumerate(messages, start=1):
-        is_summary = message.additional_kwargs.get("context_kind") == "thread_summary"
-        if isinstance(message, SystemMessage) and not is_summary:
+        is_context = message.additional_kwargs.get("context_kind") == "thread_summary"
+        if isinstance(message, SystemMessage) and not is_context:
             continue
         print(
             index,

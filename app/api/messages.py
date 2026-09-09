@@ -8,7 +8,7 @@ from fastapi import APIRouter, Body, HTTPException, status
 from fastapi.responses import StreamingResponse
 from app import database
 from app.api.agent import _auth_data_from_payload, _user_id_from_auth_data
-from app.api.schemas.messages import ChatRequest, MessageResponse, ResumeRequest
+from app.api.schemas.messages import ChatRequest, MessageResponse, PendingTaskStateResponse, ResumeRequest
 from app.checkpoint import get_checkpointer
 from app.context import create_token_counter
 from app.memory import compile_thread_context
@@ -42,6 +42,27 @@ async def get_thread_messages(
     return [
         MessageResponse(role=role, content=content) for role, content in stored_messages
     ]
+
+
+@router.get("/{thread_id}/task-state", response_model=PendingTaskStateResponse | None)
+async def get_pending_task_state(thread_id: UUID) -> PendingTaskStateResponse | None:
+    """读取会话仍待用户处理的人工确认状态。"""
+
+    user_id = _user_id_from_auth_data(_auth_data_from_payload(None))
+    try:
+        task_state = await to_thread.run_sync(database.load_thread_task_state, thread_id, user_id)
+    except RuntimeError as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    approval_status = task_state.state.get("approval_status") if task_state is not None else None
+    if approval_status not in {"pending", "approved"}:
+        return None
+    pending_actions = task_state.state.get("pending_actions")
+    if not isinstance(pending_actions, list):
+        return None
+    return PendingTaskStateResponse(
+        approval_status=approval_status,
+        pending_actions=pending_actions,
+    )
 
 
 @router.post("/{thread_id}/chat")
@@ -78,6 +99,17 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
     if stored_messages is None:
         await release_active_thread(thread_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
+    try:
+        task_state = await to_thread.run_sync(database.load_thread_task_state, thread_id, user_id)
+    except RuntimeError as error:
+        await release_active_thread(thread_id)
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    if task_state is not None and task_state.state.get("approval_status") in {"pending", "approved"}:
+        await release_active_thread(thread_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Thread has a pending approval; resume it before sending a new message",
+        )
 
     try:
         persisted = await to_thread.run_sync(
@@ -144,13 +176,29 @@ async def resume_chat(thread_id: UUID, request: ResumeRequest) -> StreamingRespo
         if thread_id in active_threads:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Thread is already running")
         active_threads.add(thread_id)
+    user_id = _user_id_from_auth_data(_auth_data_from_payload(None))
+    try:
+        task_state = await to_thread.run_sync(database.load_thread_task_state, thread_id, user_id)
+    except RuntimeError as error:
+        await release_active_thread(thread_id)
+        raise HTTPException(status_code=503, detail=str(error)) from error
+    approval_status = task_state.state.get("approval_status") if task_state is not None else None
+    if approval_status not in {"pending", "approved"}:
+        await release_active_thread(thread_id)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="No resumable approval for thread")
+    if approval_status == "approved" and not request.approved:
+        await release_active_thread(thread_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Approval was already granted; resume it with approved=true",
+        )
     trace_id = str(uuid4())
     return StreamingResponse(
         stream_reply(
             thread_id,
             [],
             trace_id,
-            _user_id_from_auth_data(_auth_data_from_payload(None)),
+            user_id,
             input_value=resume_command(request.approved, request.reason),
         ),
         media_type="text/event-stream",
