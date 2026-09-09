@@ -269,6 +269,13 @@ class ContextCompiler:
             return fitted, was_truncated  # type: ignore[return-value]
 
         message_limit = min(self.max_message_tokens, self.max_tokens)
+
+        print("\n+++++++++++++++++++++++++++++++++++++++++")
+        print("message_limit:", message_limit)
+        print("content, messages tokens:",self.token_counter.count_text(message.content), self.token_counter.count_messages([message]))
+        print("++++++++++++++++++++++++++++++++++++++++\n")
+
+
         if (
             self.token_counter.count_text(message.content) <= message_limit
             and self.token_counter.count_messages([message]) <= self.max_tokens

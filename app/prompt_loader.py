@@ -55,3 +55,12 @@ def get_report_prompt() -> str:
     if not base_prompt or not report_prompt:
         raise ValueError("Report prompt cannot be empty")
     return f"{base_prompt}\n\n{report_prompt}"
+
+
+def get_thread_summary_prompt() -> str:
+    """加载会话滚动摘要 Prompt。"""
+
+    summary_prompt = resolve_prompt_path("prompts/thread_summary.md").read_text(encoding="utf-8").strip()
+    if not summary_prompt:
+        raise ValueError("Thread summary prompt cannot be empty")
+    return summary_prompt

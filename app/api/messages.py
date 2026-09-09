@@ -6,13 +6,12 @@ from uuid import UUID, uuid4
 from anyio import to_thread
 from fastapi import APIRouter, Body, HTTPException, status
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import AIMessage, HumanMessage
-
 from app import database
 from app.api.agent import _auth_data_from_payload, _user_id_from_auth_data
 from app.api.schemas.messages import ChatRequest, MessageResponse, ResumeRequest
 from app.checkpoint import get_checkpointer
-from app.context import ContextCompiler, create_token_counter
+from app.context import create_token_counter
+from app.memory import compile_thread_context
 from app.settings import get_settings
 from app.services.chat_service import active_threads, active_threads_lock, release_active_thread, resume_command, stream_reply
 
@@ -80,10 +79,6 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
         await release_active_thread(thread_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
-    messages = [
-        HumanMessage(content=content) if role == "user" else AIMessage(content=content)
-        for role, content in stored_messages
-    ]
     try:
         persisted = await to_thread.run_sync(
             database.append_message, thread_id, user_id, "user", request.content
@@ -102,15 +97,25 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
         except RuntimeError as error:
             await release_active_thread(thread_id)
             raise HTTPException(status_code=503, detail=str(error)) from error
-    messages.append(HumanMessage(content=request.content))
     try:
         settings = get_settings()
-        compilation = ContextCompiler(
-            max_tokens=settings.context_max_tokens,
-            max_message_tokens=settings.context_max_message_tokens,
-            max_messages=settings.context_max_messages,
+        stored_context_messages = await to_thread.run_sync(
+            database.load_stored_messages, thread_id, user_id
+        )
+        if stored_context_messages is None:
+            await release_active_thread(thread_id)
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
+        thread_summary = await to_thread.run_sync(
+            database.load_thread_summary, thread_id, user_id
+        )
+        compilation = await compile_thread_context(
+            thread_id,
+            user_id,
+            stored_context_messages,
+            thread_summary,
+            settings=settings,
             token_counter=create_token_counter(settings),
-        ).compile(messages)
+        )
     except ValueError as error:
         await release_active_thread(thread_id)
         raise HTTPException(status_code=400, detail=str(error)) from error

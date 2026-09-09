@@ -2,12 +2,32 @@
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
 from app.settings import get_settings
 
 _pool: Any | None = None
+
+
+@dataclass(frozen=True)
+class StoredMessage:
+    """带持久化序号的业务消息，供上下文和摘要服务内部使用。"""
+
+    seq: int
+    role: str
+    content: str
+
+
+@dataclass(frozen=True)
+class ThreadSummary:
+    """会话当前滚动摘要及其覆盖范围。"""
+
+    summary: str
+    covered_to_seq: int
+    summary_version: int
+    summary_token_count: int
 
 
 def _get_pool() -> Any:
@@ -55,7 +75,7 @@ def create_thread(thread_id: UUID, user_id: str) -> None:
 
     with _connection() as connection:
         connection.execute(
-            "INSERT INTO aiagent.threads (thread_id, user_id) VALUES (%s, %s)",
+            "INSERT INTO aiagent.aiagent_threads (thread_id, user_id) VALUES (%s, %s)",
             (thread_id, user_id),
         )
 
@@ -65,7 +85,7 @@ def thread_exists_for_user(thread_id: UUID, user_id: str) -> bool:
 
     with _connection() as connection:
         row = connection.execute(
-            "SELECT 1 FROM aiagent.threads WHERE thread_id = %s AND user_id = %s",
+            "SELECT 1 FROM aiagent.aiagent_threads WHERE thread_id = %s AND user_id = %s",
             (thread_id, user_id),
         ).fetchone()
     return row is not None
@@ -74,24 +94,85 @@ def thread_exists_for_user(thread_id: UUID, user_id: str) -> bool:
 def load_messages(thread_id: UUID, user_id: str) -> list[tuple[str, str]] | None:
     """读取用户所属会话的消息；会话不存在或不属于用户时返回 None。"""
 
+    stored_messages = load_stored_messages(thread_id, user_id)
+    if stored_messages is None:
+        return None
+    return [(message.role, message.content) for message in stored_messages]
+
+
+def load_stored_messages(thread_id: UUID, user_id: str) -> list[StoredMessage] | None:
+    """读取带序号的业务消息，供摘要覆盖范围和上下文窗口计算。"""
+
     with _connection() as connection:
         rows = connection.execute(
             """
-            SELECT m.role, m.content
-            FROM aiagent.messages AS m
-            JOIN aiagent.threads AS t ON t.thread_id = m.thread_id
+            SELECT m.seq, m.role, m.content
+            FROM aiagent.aiagent_messages AS m
+            JOIN aiagent.aiagent_threads AS t ON t.thread_id = m.thread_id
             WHERE m.thread_id = %s AND t.user_id = %s
             ORDER BY m.seq
             """,
             (thread_id, user_id),
         ).fetchall()
         thread = connection.execute(
-            "SELECT 1 FROM aiagent.threads WHERE thread_id = %s AND user_id = %s",
+            "SELECT 1 FROM aiagent.aiagent_threads WHERE thread_id = %s AND user_id = %s",
             (thread_id, user_id),
         ).fetchone()
     if thread is None:
         return None
-    return [(str(role), str(content)) for role, content in rows]
+    return [StoredMessage(int(seq), str(role), str(content)) for seq, role, content in rows]
+
+
+def load_thread_summary(thread_id: UUID, user_id: str) -> ThreadSummary | None:
+    """读取用户所属会话的当前滚动摘要。"""
+
+    with _connection() as connection:
+        row = connection.execute(
+            """
+            SELECT s.summary, s.covered_to_seq, s.summary_version, s.summary_token_count
+            FROM aiagent.aiagent_thread_summaries AS s
+            JOIN aiagent.aiagent_threads AS t ON t.thread_id = s.thread_id
+            WHERE s.thread_id = %s AND t.user_id = %s
+            """,
+            (thread_id, user_id),
+        ).fetchone()
+    if row is None:
+        return None
+    return ThreadSummary(str(row[0]), int(row[1]), int(row[2]), int(row[3]))
+
+
+def upsert_thread_summary(
+    thread_id: UUID,
+    user_id: str,
+    summary: str,
+    covered_to_seq: int,
+    summary_token_count: int,
+) -> bool:
+    """写入更新后的摘要，仅允许覆盖范围向前推进。"""
+
+    with _connection() as connection:
+        row = connection.execute(
+            """
+            INSERT INTO aiagent.aiagent_thread_summaries (
+                thread_id, summary, covered_to_seq, summary_version, summary_token_count
+            )
+            SELECT %s, %s, %s, 1, %s
+            WHERE EXISTS (
+                SELECT 1 FROM aiagent.aiagent_threads
+                WHERE thread_id = %s AND user_id = %s
+            )
+            ON CONFLICT (thread_id) DO UPDATE
+            SET summary = EXCLUDED.summary,
+                covered_to_seq = EXCLUDED.covered_to_seq,
+                summary_version = aiagent.aiagent_thread_summaries.summary_version + 1,
+                summary_token_count = EXCLUDED.summary_token_count,
+                updated_at = now()
+            WHERE aiagent.aiagent_thread_summaries.covered_to_seq < EXCLUDED.covered_to_seq
+            RETURNING thread_id
+            """,
+            (thread_id, summary, covered_to_seq, summary_token_count, thread_id, user_id),
+        ).fetchone()
+    return row is not None
 
 
 def list_threads(user_id: str) -> list[tuple[UUID, str | None, bool, Any]]:
@@ -99,7 +180,7 @@ def list_threads(user_id: str) -> list[tuple[UUID, str | None, bool, Any]]:
     with _connection() as connection:
         rows = connection.execute(
             """SELECT thread_id, title, title_is_custom, updated_at
-               FROM aiagent.threads WHERE user_id = %s
+               FROM aiagent.aiagent_threads WHERE user_id = %s
                ORDER BY updated_at DESC""",
             (user_id,),
         ).fetchall()
@@ -110,7 +191,7 @@ def update_thread_title(thread_id: UUID, user_id: str, title: str | None) -> boo
     """更新自定义标题；传入空值时恢复自动标题。"""
     with _connection() as connection:
         row = connection.execute(
-            """UPDATE aiagent.threads SET title = %s, title_is_custom = %s, updated_at = now()
+            """UPDATE aiagent.aiagent_threads SET title = %s, title_is_custom = %s, updated_at = now()
                WHERE thread_id = %s AND user_id = %s RETURNING thread_id""",
             (title, title is not None, thread_id, user_id),
         ).fetchone()
@@ -123,7 +204,7 @@ def delete_thread(thread_id: UUID, user_id: str) -> bool:
     # 数据库外键负责级联删除消息和摘要，并将长期记忆来源置空。
     with _connection() as connection:
         row = connection.execute(
-            "DELETE FROM aiagent.threads WHERE thread_id = %s AND user_id = %s RETURNING thread_id",
+            "DELETE FROM aiagent.aiagent_threads WHERE thread_id = %s AND user_id = %s RETURNING thread_id",
             (thread_id, user_id),
         ).fetchone()
     return row is not None
@@ -133,7 +214,7 @@ def set_auto_title_if_empty(thread_id: UUID, user_id: str, title: str) -> None:
     """首次提问时设置自动标题，不覆盖用户自定义标题。"""
     with _connection() as connection:
         connection.execute(
-            """UPDATE aiagent.threads SET title = %s, updated_at = now()
+            """UPDATE aiagent.aiagent_threads SET title = %s, updated_at = now()
                WHERE thread_id = %s AND user_id = %s
                  AND title_is_custom = FALSE AND title IS NULL""",
             (title[:80], thread_id, user_id),
@@ -146,7 +227,7 @@ def append_message(thread_id: UUID, user_id: str, role: str, content: str) -> bo
     with _connection() as connection:
         row = connection.execute(
             """
-            UPDATE aiagent.threads
+            UPDATE aiagent.aiagent_threads
             SET next_message_seq = next_message_seq + 1, updated_at = now()
             WHERE thread_id = %s AND user_id = %s
             RETURNING next_message_seq
@@ -157,7 +238,7 @@ def append_message(thread_id: UUID, user_id: str, role: str, content: str) -> bo
             return False
         connection.execute(
             """
-            INSERT INTO aiagent.messages (thread_id, seq, role, content)
+            INSERT INTO aiagent.aiagent_messages (thread_id, seq, role, content)
             VALUES (%s, %s, %s, %s)
             """,
             (thread_id, row[0], role, content),

@@ -86,11 +86,12 @@ def _messages_with_prompt(agent_id: str, state: AgentGraphState | DomainGraphSta
 
     context_messages = state.get("context_messages", [])
     execution_messages = state.get("execution_messages", [])
-    return [
+    model_messages = [
         SystemMessage(content=get_agent_prompt(agent_id)),
         *context_messages,
         *execution_messages,
     ]
+    return model_messages
 
 
 # 把ToolMessage里的内容统一解析为Python dict    

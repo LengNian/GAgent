@@ -4,7 +4,7 @@ from functools import lru_cache
 
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -30,6 +30,9 @@ class Settings(BaseSettings):
         default=3000, validation_alias="CONTEXT_MAX_MESSAGE_TOKENS", ge=1
     )
     context_max_messages: int = Field(default=40, validation_alias="CONTEXT_MAX_MESSAGES", ge=1)
+    context_summary_max_tokens: int = Field(
+        default=1200, validation_alias="CONTEXT_SUMMARY_MAX_TOKENS", ge=1
+    )
     llm_tokenizer_backend: Literal["huggingface"] = Field(
         default="huggingface", validation_alias="LLM_TOKENIZER_BACKEND"
     )
@@ -58,6 +61,14 @@ class Settings(BaseSettings):
         if not value.startswith(("http://", "https://")):
             raise ValueError("NMS_API_BASE_URL must start with http:// or https://")
         return value
+
+    @model_validator(mode="after")
+    def summary_budget_must_fit_context_budget(self) -> "Settings":
+        """确保摘要预算不会耗尽当前问题的上下文空间。"""
+
+        if self.context_summary_max_tokens >= self.context_max_tokens:
+            raise ValueError("CONTEXT_SUMMARY_MAX_TOKENS must be smaller than CONTEXT_MAX_TOKENS")
+        return self
 
 
 @lru_cache(maxsize=1)

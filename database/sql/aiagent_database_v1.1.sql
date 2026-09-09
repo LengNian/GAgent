@@ -36,13 +36,13 @@ SET search_path TO aiagent, public;
 -- -----------------------------------------------------------------------------
 -- 0.0 公共触发器函数（幂等，可重复执行）
 -- -----------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.fn_update_modified_at()
+CREATE OR REPLACE FUNCTION aiagent.fn_update_modified_at()
 RETURNS TRIGGER AS $$
 BEGIN
     NEW.updated_at := CURRENT_TIMESTAMP;
     RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;    
 
 -- -----------------------------------------------------------------------------
 -- 0.1 清理旧对象（按外键依赖逆序，子表先删）
@@ -56,7 +56,6 @@ DROP TABLE IF EXISTS aiagent.aiagent_semantic_memories;
 DROP TABLE IF EXISTS aiagent.aiagent_long_term_memories;
 DROP TABLE IF EXISTS aiagent.aiagent_messages;
 DROP TABLE IF EXISTS aiagent.aiagent_threads;
-
 
 -- =============================================================================
 -- 1. 会话与消息模块（Conversation & Message）
@@ -93,7 +92,7 @@ CREATE TABLE aiagent.aiagent_messages (
     role       TEXT        NOT NULL,                        -- user | assistant
     content    TEXT        NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT pk_aiagent_messages PRIMARY KEY (thread_id, seq),
+    CONSTRAINT pk_aiagent_messages PRIMARY KEY (thread_id, seq  ),
     CONSTRAINT fk_aiagent_messages_thread FOREIGN KEY (thread_id) REFERENCES aiagent.aiagent_threads (thread_id) ON DELETE CASCADE,
     CONSTRAINT chk_aiagent_messages_seq CHECK (seq > 0),
     CONSTRAINT chk_aiagent_messages_role CHECK (role IN ('user', 'assistant')),
@@ -288,18 +287,18 @@ COMMENT ON TABLE aiagent.aiagent_knowledge_chunk_embeddings IS '知识库文档�
 -- 5. 触发器（BEFORE UPDATE 自动维护 updated_at）
 -- -----------------------------------------------------------------------------
 CREATE TRIGGER trg_aiagent_threads_modify BEFORE UPDATE ON aiagent.aiagent_threads
-FOR EACH ROW EXECUTE FUNCTION public.fn_update_modified_at();
+FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_long_term_memories_modify BEFORE UPDATE ON aiagent.aiagent_long_term_memories
-FOR EACH ROW EXECUTE FUNCTION public.fn_update_modified_at();
+FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_semantic_memories_modify BEFORE UPDATE ON aiagent.aiagent_semantic_memories
-FOR EACH ROW EXECUTE FUNCTION public.fn_update_modified_at();
+FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_thread_summaries_modify BEFORE UPDATE ON aiagent.aiagent_thread_summaries
-FOR EACH ROW EXECUTE FUNCTION public.fn_update_modified_at();
+FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_knowledge_bases_modify BEFORE UPDATE ON aiagent.aiagent_knowledge_bases
-FOR EACH ROW EXECUTE FUNCTION public.fn_update_modified_at();
+FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_knowledge_documents_modify BEFORE UPDATE ON aiagent.aiagent_knowledge_documents
-FOR EACH ROW EXECUTE FUNCTION public.fn_update_modified_at();
+FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 CREATE TRIGGER trg_aiagent_knowledge_chunk_embeddings_modify BEFORE UPDATE ON aiagent.aiagent_knowledge_chunk_embeddings
-FOR EACH ROW EXECUTE FUNCTION public.fn_update_modified_at();
+FOR EACH ROW EXECUTE FUNCTION aiagent.fn_update_modified_at();
 
 COMMIT;

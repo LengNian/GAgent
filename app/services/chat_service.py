@@ -14,6 +14,7 @@ from langgraph.errors import GraphInterrupt
 from app import database
 from app.agent import create_agent
 from app.checkpoint import get_checkpointer
+from app.debug import print_model_messages
 from app.agent.factory import AgentExecutionLimitError
 from app.agent_manifest import get_agents_config
 from app.observability import log_event, reset_trace_id, set_trace_id
@@ -142,7 +143,7 @@ async def _stream_reply(
     Args:
         thread_id: 当前正在执行的会话 ID。
         user_id: 当前会话所属用户 ID；旧的内部调用可不传入。
-        messages: 传给 Agent 的当前会话消息列表。
+          messages: 传给 Agent 的当前会话消息列表。
     Yields:
         文本增量、完成或失败事件对应的 SSE 字符串。
     逻辑规划：
@@ -163,6 +164,10 @@ async def _stream_reply(
         log_event(logger, logging.INFO, "agent_request_started", thread_id=str(thread_id))
         checkpointer = get_checkpointer()
         agent = create_agent(checkpointer=checkpointer) if checkpointer else create_agent()
+
+
+        print_model_messages(messages)
+
         config = {"configurable": {"thread_id": str(thread_id)}}
         # 上下文只属于本次请求；执行消息单独保存，resume 时由 checkpoint 恢复。
         graph_input = (
@@ -173,6 +178,7 @@ async def _stream_reply(
                 "execution_messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
             }
         )
+
         event_stream = (
             agent.astream_events(graph_input, config=config, version="v2")
             if checkpointer
@@ -186,6 +192,7 @@ async def _stream_reply(
             event_data = event.get("data") or {}
             event_output = event_data.get("output") if isinstance(event_data, dict) else None
             event_chunk = event_data.get("chunk") if isinstance(event_data, dict) else None
+            node_name = (event.get("metadata") or {}).get("langgraph_node")
             if (
                 event_name == "on_chain_end"
                 and isinstance(event_output, dict)
@@ -205,8 +212,6 @@ async def _stream_reply(
                 )
                 break
             run_id = str(event.get("run_id") or "")
-            node_name = (event.get("metadata") or {}).get("langgraph_node")
-
             if event_name == "on_chain_end" and node_name == "supervisor":
                 output = event_data.get("output")
                 if not isinstance(output, dict):
