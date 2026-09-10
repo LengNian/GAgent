@@ -114,9 +114,8 @@ def _compile_window(
 
     return ContextCompiler(
         max_tokens=max_tokens,
-        max_message_tokens=settings.context_max_message_tokens,  # 单条上限
-        max_messages=settings.context_max_messages,              # 条数上限
-        token_counter=token_counter,                             # 关键开关
+        max_message_tokens=settings.context_max_message_tokens,
+        token_counter=token_counter,
     ).compile(messages)
 
 
@@ -153,10 +152,6 @@ async def _generate_summary(
     if not isinstance(content, str) or not content.strip():
         return None
 
-    print("\n*********************Summary********************************")
-    print(content.strip())
-    print("************************************************************\n")
-
     return content.strip()
 
 
@@ -182,6 +177,24 @@ def _summary_budget_message(settings: Settings, token_counter: TokenCounter) -> 
     while token_counter.count_text(content) < settings.context_summary_max_tokens:
         content += content
     return SystemMessage(content=f"会话历史摘要：\n{content}")
+
+
+def _recent_round_messages(messages: list[BaseMessage], round_limit: int) -> list[BaseMessage]:
+    """从原文末尾提取最近若干个用户回合及其助手回复。"""
+
+    if round_limit <= 0:
+        return []
+    rounds: list[list[BaseMessage]] = []
+    index = 0
+    while index < len(messages):
+        if isinstance(messages[index], HumanMessage):
+            current_round = [messages[index]]
+            if index + 1 < len(messages) and isinstance(messages[index + 1], AIMessage):
+                current_round.append(messages[index + 1])
+                index += 1
+            rounds.append(current_round)
+        index += 1
+    return [message for current_round in rounds[-round_limit:] for message in current_round]
 
 
 # ─────────────────────────────────────────────
@@ -215,14 +228,18 @@ async def compile_thread_context(
     context_messages = [*context_prefixes, *raw_messages]
     # 算一下当前这套上下文一共占多少 token
     context_tokens = token_counter.count_messages(context_messages)
+    trigger_tokens = int(settings.context_max_tokens * settings.context_compaction_trigger_ratio)
+    summary_tokens = summary.summary_token_count if summary is not None else 0
 
     # 临时查看摘要触发余量时，只需注释或取消注释这一处输出。
     print(
         "=== context budget ===\n"
-        f"tokens: {context_tokens}/{settings.context_max_tokens}, "
-        f"remaining: {settings.context_max_tokens - context_tokens}\n"
-        f"unsummarized messages: {len(raw_messages)}/{settings.context_max_messages}, "
-        f"remaining: {settings.context_max_messages - len(raw_messages)}\n"
+        f"tokens: {context_tokens}/{settings.context_max_tokens}, "   # 总token
+        f"remaining: {settings.context_max_tokens - context_tokens}\n"   # 剩余token
+        f"usage: {context_tokens / settings.context_max_tokens:.1%}, "   # 使用比例
+        f"trigger: {trigger_tokens} ({settings.context_compaction_trigger_ratio:.1%})\n"  # 触发阈值
+        f"summary tokens before compaction: {summary_tokens}, "
+        f"unsummarized messages before compaction: {len(raw_messages)}\n"
         "======================",
         flush=True,
     )
@@ -238,23 +255,47 @@ async def compile_thread_context(
         token_counter=preliminary_counter,
     )
 
-    # 关键判断：这次裁剪「丢消息了」→ 说明放不下，必须触发摘要
-    needs_summary = preliminary.dropped_message_count > 0
+    # 达到触发水位或已经超出硬窗口时，开始压缩较早消息。
+    needs_summary = context_tokens >= trigger_tokens or preliminary.dropped_message_count > 0
+    print(
+        f"compaction: {'triggered' if needs_summary else 'not needed'} "
+        f"(dropped messages: {preliminary.dropped_message_count})",
+        flush=True,
+    )
+
     active_summary = summary        # 先假设沿用旧摘要
     summary_updated = False         # 先假设本轮没更新
+    compressed_seq = "none"
 
     if needs_summary:
-        # 造一条「占满摘要预算」的假前缀，用来算原文还能留几条
+        # 按目标比例压缩；最近若干轮不足以放进目标预算，则提升预算保护它们。
         summary_budget_prefixes = [_summary_budget_message(settings, token_counter)]
         summary_budget_counter = _PrefixedTokenCounter(
             token_counter,
             summary_budget_prefixes,
         )
+        # 目标预算 = 总预算 * 目标比例
+        target_tokens = max(
+            1,
+            int(settings.context_max_tokens * settings.context_compaction_target_ratio),
+        )
 
-        # 第二次裁剪：给摘要留满预算后，原文还能留几条
+        protected_messages = _recent_round_messages(
+            raw_messages,
+            settings.context_min_recent_rounds,
+        )
+        # 保护消息占用预算
+        protected_tokens = summary_budget_counter.count_messages(protected_messages)
+
+        compaction_tokens = min(
+            settings.context_max_tokens,
+            max(target_tokens, protected_tokens),
+        )
+
+        # 第二次裁剪：按压缩目标预算选择最近原文窗口。
         reduced_window = _compile_window(
             raw_messages,
-            max_tokens=settings.context_max_tokens,
+            max_tokens=compaction_tokens,
             settings=settings,
             token_counter=summary_budget_counter,
         )
@@ -265,6 +306,9 @@ async def compile_thread_context(
         messages_to_summarize = unsummarized[:summarized_count]
 
         if messages_to_summarize:
+            compressed_seq_start = messages_to_summarize[0].seq
+            compressed_seq_end = messages_to_summarize[-1].seq
+            compressed_seq = f"{compressed_seq_start}-{compressed_seq_end}"
             generated_summary = await _generate_summary(
                 summary,
                 messages_to_summarize,
@@ -291,7 +335,17 @@ async def compile_thread_context(
                         summary_token_count,
                     )
                     summary_updated = True
-        # 本轮模型用的原文窗口 = 给摘要留满预算后的窗口
+                    print(
+                        "=== context compaction ===\n"
+                        f"compressed seq: {compressed_seq_start}-{compressed_seq_end}\n"
+                        f"compressed messages: {len(messages_to_summarize)}, "
+                        f"retained messages: {len(reduced_window.messages)}\n"
+                        f"summary tokens: {summary_token_count}, "
+                        f"target budget: {compaction_tokens}/{settings.context_max_tokens}\n"
+                        "===========================",
+                        flush=True,
+                    )
+        # 本轮模型用的原文窗口 = 压缩目标预算下的窗口
         raw_window = reduced_window
     else:
         # 容量够、不用摘要，直接用初步窗口
@@ -305,19 +359,65 @@ async def compile_thread_context(
                 for message in stored_messages
                 if message.seq > active_summary.covered_to_seq
             ]
-        # 用「真实摘要」做前缀，再裁一次窗口（这次用真实摘要长度，确保不超预算）
+
+        # 用真实摘要做前缀，再裁一次窗口，确保不超硬上限。
         final_prefixes = [_summary_context_message(active_summary)]
         context_counter = _PrefixedTokenCounter(token_counter, final_prefixes)
+        final_max_tokens = settings.context_max_tokens
+
+        if summary_updated:
+            target_tokens = max(
+                1,
+                int(settings.context_max_tokens * settings.context_compaction_target_ratio),
+            )
+            protected_messages = _recent_round_messages(
+                raw_messages,
+                settings.context_min_recent_rounds,
+            )
+            protected_tokens = context_counter.count_messages(protected_messages)
+            final_max_tokens = min(
+                settings.context_max_tokens,
+                max(target_tokens, protected_tokens),
+            )
         raw_window = _compile_window(
             raw_messages,
-            max_tokens=settings.context_max_tokens,
+            max_tokens=final_max_tokens,
             settings=settings,
             token_counter=context_counter,
         )
         # 最终 = 真实摘要前缀 + 最近原文窗口
+        final_messages = [*final_prefixes, *raw_window.messages]
+        retained_source = stored_messages[-len(raw_window.messages):] if raw_window.messages else []
+        retained_seq = [message.seq for message in retained_source]
+        retained_rounds = sum(message.role == "user" for message in retained_source)
+        final_tokens = token_counter.count_messages(final_messages)
+        print(
+            "=== context budget (final) ===\n"
+            f"tokens: {final_tokens}/{settings.context_max_tokens}, "
+            f"usage: {final_tokens / settings.context_max_tokens:.1%}\n"
+            f"retained rounds: {retained_rounds}, retained seq: {retained_seq or 'none'}\n"
+            f"compressed seq: {compressed_seq}\n"
+            f"summary tokens: {active_summary.summary_token_count}\n"
+            "===============================",
+            flush=True,
+        )
         return CompiledThreadContext(
-            [*final_prefixes, *raw_window.messages],
+            final_messages,
             summary_updated,
         )
     # 全程没有摘要（比如首轮对话），直接返回 前缀(空) + 原文窗口
-    return CompiledThreadContext([*context_prefixes, *raw_window.messages], summary_updated)
+    final_messages = [*context_prefixes, *raw_window.messages]
+    retained_source = stored_messages[-len(raw_window.messages):] if raw_window.messages else []
+    retained_seq = [message.seq for message in retained_source]
+    retained_rounds = sum(message.role == "user" for message in retained_source)
+    final_tokens = token_counter.count_messages(final_messages)
+    print(
+        "=== context budget (final) ===\n"
+        f"tokens: {final_tokens}/{settings.context_max_tokens}, "
+        f"usage: {final_tokens / settings.context_max_tokens:.1%}\n"
+        f"retained rounds: {retained_rounds}, retained seq: {retained_seq or 'none'}\n"
+        f"compressed seq: {compressed_seq}\n"
+        "===============================",
+        flush=True,
+    )
+    return CompiledThreadContext(final_messages, summary_updated)

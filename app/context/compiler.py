@@ -77,20 +77,16 @@ class ContextCompiler:
         *,
         max_tokens: int,
         max_message_tokens: int,
-        max_messages: int,
         token_counter: TokenCounter | None = None,
     ) -> None:
 
         # max_tokens: 总预算
         # max_message_tokens: 单条上限
-        # max_messages: 条数上限
-
-        if max_tokens < 1 or max_message_tokens < 1 or max_messages < 1:
+        if max_tokens < 1 or max_message_tokens < 1:
             raise ValueError("context limits must be positive")
 
         self.max_tokens = max_tokens
         self.max_message_tokens = max_message_tokens
-        self.max_messages = max_messages
         self.token_counter = token_counter or TokenCounter()
 
     def compile(self, messages: Sequence[BaseMessage]) -> ContextCompilation:
@@ -148,10 +144,7 @@ class ContextCompiler:
             candidate_text_tokens = sum(
                 self.token_counter.count_message(message) for message in prepared_messages
             )
-            if (
-                len(selected_entries) + len(prepared_messages) > self.max_messages
-                or estimated_tokens + candidate_text_tokens > self.max_tokens
-            ):
+            if estimated_tokens + candidate_text_tokens > self.max_tokens:
                 break
 
             for prepared, original_index in reversed(list(zip(prepared_messages, candidate_indices))):
@@ -193,12 +186,6 @@ class ContextCompiler:
             if item not in selected_indices
         )
         selected_tokens = self.token_counter.count_messages(selected) if selected else 0
-
-
-        # print("\n###########################################################")
-        # print("tokens:", selected_tokens)
-        # print(selected)
-        # print("###########################################################\n")
 
 
         return ContextCompilation(
@@ -270,10 +257,10 @@ class ContextCompiler:
 
         message_limit = min(self.max_message_tokens, self.max_tokens)
 
-        print("\n+++++++++++++++++++++++++++++++++++++++++")
-        print("message_limit:", message_limit)
-        print("content, messages tokens:",self.token_counter.count_text(message.content), self.token_counter.count_messages([message]))
-        print("++++++++++++++++++++++++++++++++++++++++\n")
+        # print("\n+++++++++++++++++++++++++++++++++++++++++")
+        # print("message_limit:", message_limit)
+        # print("content, messages tokens:", self.token_counter.count_text(message.content), self.token_counter.count_message(message))
+        # print("++++++++++++++++++++++++++++++++++++++++\n")
 
 
         if (

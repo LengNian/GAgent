@@ -29,9 +29,17 @@ class Settings(BaseSettings):
     context_max_message_tokens: int = Field(
         default=3000, validation_alias="CONTEXT_MAX_MESSAGE_TOKENS", ge=1
     )
-    context_max_messages: int = Field(default=40, validation_alias="CONTEXT_MAX_MESSAGES", ge=1)
     context_summary_max_tokens: int = Field(
         default=1200, validation_alias="CONTEXT_SUMMARY_MAX_TOKENS", ge=1
+    )
+    context_compaction_trigger_ratio: float = Field(
+        default=0.8, validation_alias="CONTEXT_COMPACTION_TRIGGER_RATIO", gt=0, le=1
+    )
+    context_compaction_target_ratio: float = Field(
+        default=0.4, validation_alias="CONTEXT_COMPACTION_TARGET_RATIO", gt=0, lt=1
+    )
+    context_min_recent_rounds: int = Field(
+        default=10, validation_alias="CONTEXT_MIN_RECENT_ROUNDS", ge=0
     )
     llm_tokenizer_backend: Literal["huggingface"] = Field(
         default="huggingface", validation_alias="LLM_TOKENIZER_BACKEND"
@@ -68,6 +76,11 @@ class Settings(BaseSettings):
 
         if self.context_summary_max_tokens >= self.context_max_tokens:
             raise ValueError("CONTEXT_SUMMARY_MAX_TOKENS must be smaller than CONTEXT_MAX_TOKENS")
+        if self.context_compaction_target_ratio >= self.context_compaction_trigger_ratio:
+            raise ValueError(
+                "CONTEXT_COMPACTION_TARGET_RATIO must be smaller than "
+                "CONTEXT_COMPACTION_TRIGGER_RATIO"
+            )
         return self
 
 
