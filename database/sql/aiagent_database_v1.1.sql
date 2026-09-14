@@ -54,6 +54,7 @@ DROP TABLE IF EXISTS aiagent.aiagent_knowledge_bases;
 DROP TABLE IF EXISTS aiagent.aiagent_thread_summaries;
 DROP TABLE IF EXISTS aiagent.aiagent_thread_states;
 DROP TABLE IF EXISTS aiagent.aiagent_semantic_memories;
+DROP TABLE IF EXISTS aiagent.aiagent_long_term_memory_evidence;
 DROP TABLE IF EXISTS aiagent.aiagent_long_term_memories;
 DROP TABLE IF EXISTS aiagent.aiagent_messages;
 DROP TABLE IF EXISTS aiagent.aiagent_threads;
@@ -126,27 +127,95 @@ COMMENT ON TABLE aiagent.aiagent_thread_states IS '会话级短期任务状态�
 -- 2. 长期记忆模块（Long-term Memory）
 -- =============================================================================
 
--- 长期记忆表：用户明确要求记住的事实文本；停用使用 is_active=FALSE，不建议物理删除
+-- 长期记忆表：保存经抽取、校验和合并后的用户长期记忆；停用使用 is_active=FALSE
 CREATE TABLE aiagent.aiagent_long_term_memories (
-    memory_id        BIGINT      NOT NULL GENERATED ALWAYS AS IDENTITY,
-    user_id          TEXT        NOT NULL,
-    content          TEXT        NOT NULL,
-    source_thread_id UUID,
-    is_active        BOOLEAN     NOT NULL DEFAULT TRUE,     -- FALSE=不参与记忆检索
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    memory_id            BIGINT      NOT NULL GENERATED ALWAYS AS IDENTITY,
+    user_id              TEXT        NOT NULL,
+    content              TEXT        NOT NULL,
+    memory_type          TEXT        NOT NULL,
+    subject              TEXT        NOT NULL,
+    attribute            TEXT        NOT NULL,
+    importance           SMALLINT    NOT NULL,
+    source_thread_id     UUID,
+    supersedes_memory_id BIGINT,
+    is_active            BOOLEAN     NOT NULL DEFAULT TRUE, -- FALSE=不参与记忆检索
+    last_used_at         TIMESTAMPTZ,
+    inactive_reason      TEXT,
+    inactivated_at       TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT pk_aiagent_long_term_memories PRIMARY KEY (memory_id),
     CONSTRAINT fk_aiagent_ltm_source_thread FOREIGN KEY (source_thread_id, user_id)
         REFERENCES aiagent.aiagent_threads (thread_id, user_id) ON DELETE SET NULL (source_thread_id),
+    CONSTRAINT fk_aiagent_ltm_supersedes FOREIGN KEY (supersedes_memory_id)
+        REFERENCES aiagent.aiagent_long_term_memories (memory_id) ON DELETE SET NULL,
     CONSTRAINT chk_aiagent_ltm_user_id CHECK (btrim(user_id) <> ''),
-    CONSTRAINT chk_aiagent_ltm_content CHECK (btrim(content) <> '')
+    CONSTRAINT chk_aiagent_ltm_content CHECK (btrim(content) <> ''),
+    CONSTRAINT chk_aiagent_ltm_type CHECK (memory_type IN ('profile', 'preference', 'commitment')),
+    CONSTRAINT chk_aiagent_ltm_subject CHECK (btrim(subject) <> ''),
+    CONSTRAINT chk_aiagent_ltm_type_attribute CHECK (
+        (memory_type = 'profile' AND attribute IN (
+            'name', 'residence', 'occupation', 'organization', 'long_term_goal'
+        ))
+        OR (memory_type = 'preference' AND attribute IN (
+            'dietary_preference', 'communication_preference', 'work_preference'
+        ))
+        OR (memory_type = 'commitment' AND attribute IN (
+            'project_decision', 'project_constraint'
+        ))
+    ),
+    CONSTRAINT chk_aiagent_ltm_importance CHECK (importance BETWEEN 0 AND 10),
+    CONSTRAINT chk_aiagent_ltm_no_self_supersede CHECK (
+        supersedes_memory_id IS NULL OR supersedes_memory_id <> memory_id
+    ),
+    CONSTRAINT chk_aiagent_ltm_inactive_state CHECK (
+        (is_active AND inactive_reason IS NULL AND inactivated_at IS NULL)
+        OR (
+            NOT is_active
+            AND inactive_reason IN ('user_requested', 'superseded', 'invalid', 'stale')
+            AND inactivated_at IS NOT NULL
+        )
+    )
 );
 
 -- 仅索引启用中的记忆（按用户最近创建排序）
 CREATE INDEX idx_aiagent_ltm_active_user ON aiagent.aiagent_long_term_memories (user_id, created_at DESC) WHERE is_active;
+CREATE INDEX idx_aiagent_ltm_active_attribute
+    ON aiagent.aiagent_long_term_memories (user_id, subject, attribute)
+    WHERE is_active;
+CREATE INDEX idx_aiagent_ltm_active_decay
+    ON aiagent.aiagent_long_term_memories (
+        memory_type, importance, (COALESCE(last_used_at, created_at))
+    )
+    WHERE is_active;
 
-COMMENT ON TABLE aiagent.aiagent_long_term_memories IS '长期记忆表：保存用户明确要求记住的事实文本，通过 user_id 归属用户；停用记忆用 is_active=FALSE，不建议物理删除作为常规失效方式';
+COMMENT ON TABLE aiagent.aiagent_long_term_memories IS '长期记忆表：保存经抽取、校验和合并后的用户长期记忆；停用使用 is_active=FALSE，并通过 supersedes_memory_id 保留替代关系';
 COMMENT ON COLUMN aiagent.aiagent_long_term_memories.source_thread_id IS '产生记忆的来源会话，复合外键 (source_thread_id, user_id) 关联会话表，删除来源会话时仅将 source_thread_id 置空';
+COMMENT ON COLUMN aiagent.aiagent_long_term_memories.memory_type IS '记忆分类，仅允许 profile、preference 或 commitment';
+COMMENT ON COLUMN aiagent.aiagent_long_term_memories.subject IS '记忆主体；第一版通常为 user';
+COMMENT ON COLUMN aiagent.aiagent_long_term_memories.attribute IS '用于识别重复或冲突记忆的受控语义属性，必须与 memory_type 的白名单匹配';
+COMMENT ON COLUMN aiagent.aiagent_long_term_memories.importance IS '记忆重要度，范围 0 至 10';
+COMMENT ON COLUMN aiagent.aiagent_long_term_memories.supersedes_memory_id IS '当前记忆替代的旧记忆；旧记忆保留但通常被停用';
+COMMENT ON COLUMN aiagent.aiagent_long_term_memories.last_used_at IS '记忆最近一次实际被注入模型上下文的时间；为空时使用 created_at 作为衰减起点';
+COMMENT ON COLUMN aiagent.aiagent_long_term_memories.inactive_reason IS '停用原因，仅允许 user_requested、superseded、invalid 或 stale';
+COMMENT ON COLUMN aiagent.aiagent_long_term_memories.inactivated_at IS '记忆被停用的时间；启用记忆必须为空';
+
+-- 长期记忆证据表：每条证据必须指向真实业务消息，支持一条记忆对应多条证据
+CREATE TABLE aiagent.aiagent_long_term_memory_evidence (
+    memory_id   BIGINT NOT NULL,
+    thread_id   UUID   NOT NULL,
+    message_seq BIGINT NOT NULL,
+    CONSTRAINT pk_aiagent_ltm_evidence PRIMARY KEY (memory_id, thread_id, message_seq),
+    CONSTRAINT fk_aiagent_ltm_evidence_memory FOREIGN KEY (memory_id)
+        REFERENCES aiagent.aiagent_long_term_memories (memory_id) ON DELETE CASCADE,
+    CONSTRAINT fk_aiagent_ltm_evidence_message FOREIGN KEY (thread_id, message_seq)
+        REFERENCES aiagent.aiagent_messages (thread_id, seq) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_aiagent_ltm_evidence_message
+    ON aiagent.aiagent_long_term_memory_evidence (thread_id, message_seq);
+
+COMMENT ON TABLE aiagent.aiagent_long_term_memory_evidence IS '长期记忆的消息级证据关联表；服务层还需校验消息所属用户与长期记忆 user_id 一致';
 
 -- 语义记忆向量表：保存长期记忆的向量索引，不保存原始事实文本
 CREATE TABLE aiagent.aiagent_semantic_memories (
