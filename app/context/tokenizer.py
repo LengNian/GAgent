@@ -1,5 +1,6 @@
 """配置化加载模型官方 tokenizer。"""
 
+from collections.abc import Mapping
 from functools import lru_cache
 from typing import Any
 
@@ -24,12 +25,26 @@ class HuggingFaceTokenCounter(TokenCounter):
     def count_messages(self, messages: list[BaseMessage]) -> int:
         """按模型聊天模板计算消息 token 数，包含角色和生成提示开销。"""
 
+        # =========================================================================
+        # [逻辑规划]
+        # 1. 将 LangChain 消息转换为官方聊天模板要求的 role/content 结构。
+        # 2. 兼容 tokenizer 返回 token 列表或 BatchEncoding；后者必须读取 input_ids，
+        #    不能对整个对象计数，否则会错误得到字段数量（例如固定为 2）。
+        # 3. 对批次形式的 input_ids 只接受单条消息批次，返回真实序列长度。
+        # =========================================================================
         chat_messages = [self._to_chat_message(message) for message in messages]
-        token_ids = self.tokenizer.apply_chat_template(
+        encoded = self.tokenizer.apply_chat_template(
             chat_messages,
             tokenize=True,
             add_generation_prompt=True,
         )
+        token_ids = encoded["input_ids"] if isinstance(encoded, Mapping) else encoded
+        if hasattr(token_ids, "tolist"):
+            token_ids = token_ids.tolist()
+        if token_ids and isinstance(token_ids[0], list):
+            if len(token_ids) != 1:
+                raise ValueError("Chat template must return a single token sequence")
+            token_ids = token_ids[0]
         return len(token_ids)
 
     @staticmethod

@@ -64,3 +64,14 @@ def get_thread_summary_prompt() -> str:
     if not summary_prompt:
         raise ValueError("Thread summary prompt cannot be empty")
     return summary_prompt
+
+
+def get_long_term_memory_extraction_prompt() -> str:
+    """加载长期记忆候选抽取 Prompt。"""
+
+    memory_prompt = resolve_prompt_path("prompts/long_term_memory_extraction.md").read_text(
+        encoding="utf-8"
+    ).strip()
+    if not memory_prompt:
+        raise ValueError("Long-term memory extraction prompt cannot be empty")
+    return memory_prompt

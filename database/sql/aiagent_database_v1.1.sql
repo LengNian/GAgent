@@ -70,13 +70,15 @@ CREATE TABLE aiagent.aiagent_threads (
     title            TEXT,
     title_is_custom  BOOLEAN     NOT NULL DEFAULT FALSE,
     next_message_seq BIGINT      NOT NULL DEFAULT 0,        -- 分配下一条消息序号时使用
+    long_term_memory_processed_seq BIGINT NOT NULL DEFAULT 0, -- 长期记忆抽取已处理到的消息序号
     created_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT pk_aiagent_threads PRIMARY KEY (thread_id),
     CONSTRAINT uk_aiagent_threads_thread_user UNIQUE (thread_id, user_id),
     CONSTRAINT chk_aiagent_threads_user_id CHECK (btrim(user_id) <> ''),
     CONSTRAINT chk_aiagent_threads_title CHECK (title IS NULL OR btrim(title) <> ''),
-    CONSTRAINT chk_aiagent_threads_next_seq CHECK (next_message_seq >= 0)
+    CONSTRAINT chk_aiagent_threads_next_seq CHECK (next_message_seq >= 0),
+    CONSTRAINT chk_aiagent_threads_long_term_memory_processed_seq CHECK (long_term_memory_processed_seq >= 0)
 );
 
 CREATE INDEX idx_aiagent_threads_user_updated ON aiagent.aiagent_threads (user_id, updated_at DESC);
@@ -86,6 +88,7 @@ COMMENT ON COLUMN aiagent.aiagent_threads.user_id IS '会话所属用户 ID';
 COMMENT ON COLUMN aiagent.aiagent_threads.title IS '会话标题；为空时由应用根据首条用户消息生成';
 COMMENT ON COLUMN aiagent.aiagent_threads.title_is_custom IS '是否为用户手动设置的标题';
 COMMENT ON COLUMN aiagent.aiagent_threads.next_message_seq IS '分配下一条消息序号时使用，必须 >= 0';
+COMMENT ON COLUMN aiagent.aiagent_threads.long_term_memory_processed_seq IS '长期记忆增量抽取已成功处理到的消息序号，必须 >= 0';
 
 -- 消息表：复合主键 (thread_id, seq)，role 仅允许 user/assistant，会话删除时级联删除
 CREATE TABLE aiagent.aiagent_messages (

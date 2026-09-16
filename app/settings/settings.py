@@ -41,6 +41,100 @@ class Settings(BaseSettings):
     context_min_recent_rounds: int = Field(
         default=10, validation_alias="CONTEXT_MIN_RECENT_ROUNDS", ge=0
     )
+    long_term_memory_enabled: bool = Field(
+        default=True, validation_alias="LONG_TERM_MEMORY_ENABLED"
+    )
+    long_term_memory_extraction_model: str | None = Field(
+        default=None, validation_alias="LONG_TERM_MEMORY_EXTRACTION_MODEL"
+    )
+    long_term_memory_extraction_temperature: float = Field(
+        default=0, validation_alias="LONG_TERM_MEMORY_EXTRACTION_TEMPERATURE", ge=0, le=2
+    )
+    long_term_memory_extraction_max_tokens: int = Field(
+        default=600, validation_alias="LONG_TERM_MEMORY_EXTRACTION_MAX_TOKENS", ge=1
+    )
+    long_term_memory_extraction_timeout_seconds: float = Field(
+        default=30, validation_alias="LONG_TERM_MEMORY_EXTRACTION_TIMEOUT_SECONDS", gt=0
+    )
+    long_term_memory_max_candidates: int = Field(
+        default=5, validation_alias="LONG_TERM_MEMORY_MAX_CANDIDATES", ge=1
+    )
+    long_term_memory_max_content_length: int = Field(
+        default=240, validation_alias="LONG_TERM_MEMORY_MAX_CONTENT_LENGTH", ge=1
+    )
+    long_term_memory_min_importance: int = Field(
+        default=4, validation_alias="LONG_TERM_MEMORY_MIN_IMPORTANCE", ge=0, le=10
+    )
+    long_term_memory_max_evidence_messages: int = Field(
+        default=4, validation_alias="LONG_TERM_MEMORY_MAX_EVIDENCE_MESSAGES", ge=1
+    )
+    long_term_memory_embedding_enabled: bool = Field(
+        default=True, validation_alias="LONG_TERM_MEMORY_EMBEDDING_ENABLED"
+    )
+    long_term_memory_embedding_model: str = Field(
+        default="BAAI/bge-base-zh-v1.5",
+        validation_alias="LONG_TERM_MEMORY_EMBEDDING_MODEL",
+        min_length=1,
+    )
+    long_term_memory_embedding_dimensions: int = Field(
+        default=768,
+        validation_alias="LONG_TERM_MEMORY_EMBEDDING_DIMENSIONS",
+        ge=768,
+        le=2048,
+    )
+    long_term_memory_embedding_device: str = Field(
+        default="cpu", validation_alias="LONG_TERM_MEMORY_EMBEDDING_DEVICE", min_length=1
+    )
+    long_term_memory_embedding_timeout_seconds: float = Field(
+        default=30,
+        validation_alias="LONG_TERM_MEMORY_EMBEDDING_TIMEOUT_SECONDS",
+        gt=0,
+    )
+    long_term_memory_semantic_dedup_enabled: bool = Field(
+        default=True, validation_alias="LONG_TERM_MEMORY_SEMANTIC_DEDUP_ENABLED"
+    )
+    long_term_memory_semantic_dedup_distance: float = Field(
+        default=0.2,
+        validation_alias="LONG_TERM_MEMORY_SEMANTIC_DEDUP_DISTANCE",
+        ge=0,
+        le=2,
+    )
+    long_term_memory_recall_enabled: bool = Field(
+        default=True, validation_alias="LONG_TERM_MEMORY_RECALL_ENABLED"
+    )
+    long_term_memory_recall_candidate_limit: int = Field(
+        default=10, validation_alias="LONG_TERM_MEMORY_RECALL_CANDIDATE_LIMIT", ge=1
+    )
+    long_term_memory_recall_top_n: int = Field(
+        default=3, validation_alias="LONG_TERM_MEMORY_RECALL_TOP_N", ge=1
+    )
+    long_term_memory_recall_min_score: float = Field(
+        default=0.5, validation_alias="LONG_TERM_MEMORY_RECALL_MIN_SCORE", ge=0, le=1
+    )
+    long_term_memory_recall_relevance_weight: float = Field(
+        default=0.7, validation_alias="LONG_TERM_MEMORY_RECALL_RELEVANCE_WEIGHT", ge=0, le=1
+    )
+    long_term_memory_recall_importance_weight: float = Field(
+        default=0.2, validation_alias="LONG_TERM_MEMORY_RECALL_IMPORTANCE_WEIGHT", ge=0, le=1
+    )
+    long_term_memory_recall_recency_weight: float = Field(
+        default=0.1, validation_alias="LONG_TERM_MEMORY_RECALL_RECENCY_WEIGHT", ge=0, le=1
+    )
+    long_term_memory_recall_profile_decay_k: float = Field(
+        default=0.001, validation_alias="LONG_TERM_MEMORY_RECALL_PROFILE_DECAY_K", ge=0
+    )
+    long_term_memory_recall_preference_decay_k: float = Field(
+        default=0.003, validation_alias="LONG_TERM_MEMORY_RECALL_PREFERENCE_DECAY_K", ge=0
+    )
+    long_term_memory_recall_commitment_decay_k: float = Field(
+        default=0.01, validation_alias="LONG_TERM_MEMORY_RECALL_COMMITMENT_DECAY_K", ge=0
+    )
+    long_term_memory_injection_enabled: bool = Field(
+        default=True, validation_alias="LONG_TERM_MEMORY_INJECTION_ENABLED"
+    )
+    long_term_memory_injection_max_tokens: int = Field(
+        default=512, validation_alias="LONG_TERM_MEMORY_INJECTION_MAX_TOKENS", ge=1
+    )
     llm_tokenizer_backend: Literal["huggingface"] = Field(
         default="huggingface", validation_alias="LLM_TOKENIZER_BACKEND"
     )
@@ -81,10 +175,22 @@ class Settings(BaseSettings):
                 "CONTEXT_COMPACTION_TARGET_RATIO must be smaller than "
                 "CONTEXT_COMPACTION_TRIGGER_RATIO"
             )
+        recall_weight_total = (
+            self.long_term_memory_recall_relevance_weight
+            + self.long_term_memory_recall_importance_weight
+            + self.long_term_memory_recall_recency_weight
+        )
+        if abs(recall_weight_total - 1) > 1e-9:
+            raise ValueError("Long-term memory recall weights must sum to 1")
+        if self.long_term_memory_recall_top_n > self.long_term_memory_recall_candidate_limit:
+            raise ValueError(
+                "LONG_TERM_MEMORY_RECALL_TOP_N must not exceed "
+                "LONG_TERM_MEMORY_RECALL_CANDIDATE_LIMIT"
+            )
         return self
 
 
-@lru_cache(maxsize=1)
+# @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """加载并缓存当前进程使用的配置实例。
 

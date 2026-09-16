@@ -17,7 +17,9 @@ from app.checkpoint import get_checkpointer
 from app.debug import print_model_messages
 from app.agent.factory import AgentExecutionLimitError
 from app.agent_manifest import get_agents_config
+from app.memory import extract_and_persist_long_term_memories
 from app.observability import log_event, reset_trace_id, set_trace_id
+from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,32 @@ def _agent_display_name(agent_id: str) -> str:
     return display_names.get(agent_id, agent_id)
 
 
+def _schedule_long_term_memory_extraction(
+    thread_id: UUID, user_id: str | None, assistant_seq: int | None
+) -> None:
+    """在最终助手消息落库后异步安排长期记忆抽取。"""
+
+    # =========================================================================
+    # [逻辑规划]
+    # 1. 旧调用或缺失用户归属时跳过，避免无隔离范围的长期记忆写入。
+    # 2. 读取开关配置，关闭时不创建后台任务。
+    # 3. 使用独立任务执行抽取；抽取服务自身捕获模型和数据库异常，不能阻塞 SSE done。
+    # =========================================================================
+    if user_id is None or assistant_seq is None:
+        return
+    settings = get_settings()
+    if not settings.long_term_memory_enabled:
+        return
+    asyncio.create_task(
+        extract_and_persist_long_term_memories(
+            thread_id,
+            user_id,
+            settings=settings,
+            through_seq=assistant_seq,
+        )
+    )
+
+
 async def _stream_reply(
     thread_id: UUID,
     messages: list[BaseMessage],
@@ -184,6 +212,20 @@ async def _stream_reply(
             }
         )
 
+        injected_groups = []
+        if input_value is None and user_id is not None:
+            for message in messages:
+                if getattr(message, "additional_kwargs", {}).get("context_kind") == "long_term_memory":
+                    candidate_groups = getattr(message, "additional_kwargs", {}).get("memory_group_keys", [])
+                    if isinstance(candidate_groups, list):
+                        injected_groups = [
+                            tuple(group)
+                            for group in candidate_groups
+                            if isinstance(group, (list, tuple)) and len(group) == 3
+                        ]
+                    break
+        memories_touched = False
+
         event_stream = (
             agent.astream_events(graph_input, config=config, version="v2")
             if checkpointer
@@ -192,9 +234,15 @@ async def _stream_reply(
 
         interrupted = False
         async for event in event_stream:
-
             event_name = event.get("event")
             event_data = event.get("data") or {}
+            if event_name == "on_chat_model_start" and injected_groups and not memories_touched:
+                await to_thread.run_sync(
+                    database.touch_long_term_memory_groups,
+                    user_id,
+                    injected_groups,
+                )
+                memories_touched = True
             event_output = event_data.get("output") if isinstance(event_data, dict) else None
             event_chunk = event_data.get("chunk") if isinstance(event_data, dict) else None
             node_name = (event.get("metadata") or {}).get("langgraph_node")
@@ -350,10 +398,12 @@ async def _stream_reply(
             raise ValueError("Agent returned an empty response")
         messages.append(AIMessage(content=assistant_text))
         if user_id is not None:
-            await to_thread.run_sync(
+            assistant_persisted = await to_thread.run_sync(
                 database.append_message, thread_id, user_id, "assistant", assistant_text
             )
-            
+            if assistant_persisted:
+                _schedule_long_term_memory_extraction(thread_id, user_id, assistant_persisted)
+
         log_event(
             logger,
             logging.INFO,

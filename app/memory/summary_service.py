@@ -17,6 +17,10 @@ from langchain_openai import ChatOpenAI  # 调用大模型
 from app import database
 from app.context import ContextCompiler, TokenCounter  # 按预算裁剪窗口
 from app.database import StoredMessage, ThreadSummary   # 数据库里的消息/摘要结构
+from app.memory.long_term_memory_recall_service import (
+    RecalledLongTermMemoryGroup,
+    format_long_term_memory_groups,
+)
 from app.prompt_loader import get_thread_summary_prompt # 读取摘要提示词
 from app.settings import Settings
 
@@ -36,6 +40,7 @@ class CompiledThreadContext:
     messages: list[BaseMessage]
     # 本轮是否真的/推进了摘要，用于读写数据库的判断
     summary_updated: bool
+    injected_memory_groups: list[tuple[str, str, str]] | None = None
 
 
 # ─────────────────────────────────────────────
@@ -213,6 +218,7 @@ async def compile_thread_context(
     *,
     settings: Settings,
     token_counter: TokenCounter,
+    long_term_memory_groups: Sequence[RecalledLongTermMemoryGroup] = (),
 ) -> CompiledThreadContext:
     """必要时更新摘要，并返回符合总预算的最终业务上下文。"""
 
@@ -222,8 +228,34 @@ async def compile_thread_context(
     unsummarized = [message for message in stored_messages if message.seq > covered_to_seq]
     # 转成模型能用的消息对象
     raw_messages = [_to_message(message) for message in unsummarized]
-    # 如果有旧摘要，就把它包成一条前缀；没有就空列表
-    context_prefixes = [_summary_context_message(summary)] if summary is not None else []
+    selected_memory_groups: list[RecalledLongTermMemoryGroup] = []
+    if long_term_memory_groups and settings.long_term_memory_injection_enabled:
+        for group in long_term_memory_groups:
+            candidate_groups = [*selected_memory_groups, group]
+            candidate_message = SystemMessage(content=format_long_term_memory_groups(candidate_groups))
+            if token_counter.count_messages([candidate_message]) > settings.long_term_memory_injection_max_tokens:
+                continue
+            selected_memory_groups.append(group)
+    memory_message = (
+        SystemMessage(
+            content=format_long_term_memory_groups(selected_memory_groups),
+            additional_kwargs={
+                "context_kind": "long_term_memory",
+                "memory_group_keys": [
+                    (group.memory_type, group.subject, group.attribute)
+                    for group in selected_memory_groups
+                ],
+            },
+        )
+        if selected_memory_groups
+        else None
+    )
+    # 长期记忆和摘要都作为固定前缀，参与同一套 token 预算计算。
+    context_prefixes = [
+        message
+        for message in (memory_message, _summary_context_message(summary) if summary is not None else None)
+        if message is not None
+    ]
     # 前缀 + 原文 拼在一起，代表完整上下文长什么样
     context_messages = [*context_prefixes, *raw_messages]
     # 算一下当前这套上下文一共占多少 token
@@ -269,7 +301,11 @@ async def compile_thread_context(
 
     if needs_summary:
         # 按目标比例压缩；最近若干轮不足以放进目标预算，则提升预算保护它们。
-        summary_budget_prefixes = [_summary_budget_message(settings, token_counter)]
+        summary_budget_prefixes = [
+            message
+            for message in (memory_message, _summary_budget_message(settings, token_counter))
+            if message is not None
+        ]
         summary_budget_counter = _PrefixedTokenCounter(
             token_counter,
             summary_budget_prefixes,
@@ -361,7 +397,11 @@ async def compile_thread_context(
             ]
 
         # 用真实摘要做前缀，再裁一次窗口，确保不超硬上限。
-        final_prefixes = [_summary_context_message(active_summary)]
+        final_prefixes = [
+            message
+            for message in (memory_message, _summary_context_message(active_summary))
+            if message is not None
+        ]
         context_counter = _PrefixedTokenCounter(token_counter, final_prefixes)
         final_max_tokens = settings.context_max_tokens
 
@@ -404,6 +444,10 @@ async def compile_thread_context(
         return CompiledThreadContext(
             final_messages,
             summary_updated,
+            injected_memory_groups=[
+                (group.memory_type, group.subject, group.attribute)
+                for group in selected_memory_groups
+            ],
         )
     # 全程没有摘要（比如首轮对话），直接返回 前缀(空) + 原文窗口
     final_messages = [*context_prefixes, *raw_window.messages]
@@ -420,4 +464,11 @@ async def compile_thread_context(
         "===============================",
         flush=True,
     )
-    return CompiledThreadContext(final_messages, summary_updated)
+    return CompiledThreadContext(
+        final_messages,
+        summary_updated,
+        injected_memory_groups=[
+            (group.memory_type, group.subject, group.attribute)
+            for group in selected_memory_groups
+        ],
+    )

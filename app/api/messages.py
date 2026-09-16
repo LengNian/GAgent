@@ -6,12 +6,19 @@ from uuid import UUID, uuid4
 from anyio import to_thread
 from fastapi import APIRouter, Body, HTTPException, status
 from fastapi.responses import StreamingResponse
+from langchain_core.messages import SystemMessage
 from app import database
 from app.api.agent import _auth_data_from_payload, _user_id_from_auth_data
 from app.api.schemas.messages import ChatRequest, MessageResponse, PendingTaskStateResponse, ResumeRequest
 from app.checkpoint import get_checkpointer
 from app.context import create_token_counter
-from app.memory import compile_thread_context
+from app.memory import (
+    compile_thread_context,
+    format_long_term_memory_groups,
+    LongTermMemoryRecallResult,
+    print_long_term_memory_recall,
+    recall_long_term_memories,
+)
 from app.settings import get_settings
 from app.services.chat_service import active_threads, active_threads_lock, release_active_thread, resume_command, stream_reply
 
@@ -131,6 +138,16 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
             raise HTTPException(status_code=503, detail=str(error)) from error
     try:
         settings = get_settings()
+        recall_result = LongTermMemoryRecallResult(candidates=[], top_groups=[])
+        try:
+            recall_result = await recall_long_term_memories(
+                user_id,
+                request.content,
+                settings=settings,
+            )
+            print_long_term_memory_recall(request.content, recall_result)
+        except Exception as error:
+            print(f"long-term memory recall failed: {error}")
         stored_context_messages = await to_thread.run_sync(
             database.load_stored_messages, thread_id, user_id
         )
@@ -140,13 +157,35 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
         thread_summary = await to_thread.run_sync(
             database.load_thread_summary, thread_id, user_id
         )
+        token_counter = create_token_counter(settings)
         compilation = await compile_thread_context(
             thread_id,
             user_id,
             stored_context_messages,
             thread_summary,
             settings=settings,
-            token_counter=create_token_counter(settings),
+            token_counter=token_counter,
+            long_term_memory_groups=(
+                recall_result.top_groups if settings.long_term_memory_injection_enabled else ()
+            ),
+        )
+        injected_groups = compilation.injected_memory_groups or []
+        injected_tokens = 0
+        if injected_groups:
+            selected_groups = [
+                group
+                for group in recall_result.top_groups
+                if (group.memory_type, group.subject, group.attribute) in injected_groups
+            ]
+            injected_tokens = token_counter.count_messages(
+                [SystemMessage(content=format_long_term_memory_groups(selected_groups))]
+            )
+        print(
+            "=== injected long-term memories ===\n"
+            f"groups: {len(injected_groups)}, tokens: {injected_tokens}/{settings.long_term_memory_injection_max_tokens}\n"
+            f"group keys: {injected_groups or 'none'}\n"
+            "====================================",
+            flush=True,
         )
     except ValueError as error:
         await release_active_thread(thread_id)
