@@ -14,9 +14,9 @@ from anyio import to_thread         # 把阻塞的数据库操作丢到后台线
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI  # 调用大模型
 
-from app import database
+from app.db.repositories import summary_repository
 from app.context import ContextCompiler, TokenCounter  # 按预算裁剪窗口
-from app.database import StoredMessage, ThreadSummary   # 数据库里的消息/摘要结构
+from app.db.models import StoredMessage, ThreadSummary   # 数据库里的消息/摘要结构
 from app.memory.long_term_memory_recall_service import (
     RecalledLongTermMemoryGroup,
     format_long_term_memory_groups,
@@ -356,7 +356,7 @@ async def compile_thread_context(
                 summary_token_count = token_counter.count_text(generated_summary)
                 # 把数据库写入丢到后台线程，不阻塞异步主流程
                 persisted = await to_thread.run_sync(
-                    database.upsert_thread_summary,
+                    summary_repository.upsert_thread_summary,
                     thread_id,
                     user_id,
                     generated_summary,

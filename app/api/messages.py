@@ -7,7 +7,11 @@ from anyio import to_thread
 from fastapi import APIRouter, Body, HTTPException, status
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import SystemMessage
-from app import database
+from app.db.repositories import (
+    summary_repository,
+    task_state_repository,
+    thread_repository,
+)
 from app.api.agent import _auth_data_from_payload, _user_id_from_auth_data
 from app.api.schemas.messages import ChatRequest, MessageResponse, PendingTaskStateResponse, ResumeRequest
 from app.checkpoint import get_checkpointer
@@ -40,7 +44,7 @@ async def get_thread_messages(
 
     user_id = _user_id_from_auth_data(_auth_data_from_payload(payload))
     try:
-        stored_messages = await to_thread.run_sync(database.load_messages, thread_id, user_id)
+        stored_messages = await to_thread.run_sync(thread_repository.load_messages, thread_id, user_id)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     if stored_messages is None:
@@ -57,7 +61,7 @@ async def get_pending_task_state(thread_id: UUID) -> PendingTaskStateResponse | 
 
     user_id = _user_id_from_auth_data(_auth_data_from_payload(None))
     try:
-        task_state = await to_thread.run_sync(database.load_thread_task_state, thread_id, user_id)
+        task_state = await to_thread.run_sync(task_state_repository.load_thread_task_state, thread_id, user_id)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     approval_status = task_state.state.get("approval_status") if task_state is not None else None
@@ -97,7 +101,7 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
         active_threads.add(thread_id)
 
     try:
-        stored_messages = await to_thread.run_sync(database.load_messages, thread_id, user_id)
+        stored_messages = await to_thread.run_sync(thread_repository.load_messages, thread_id, user_id)
     except Exception as error:
         await release_active_thread(thread_id)
         if isinstance(error, RuntimeError):
@@ -107,7 +111,7 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
         await release_active_thread(thread_id)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     try:
-        task_state = await to_thread.run_sync(database.load_thread_task_state, thread_id, user_id)
+        task_state = await to_thread.run_sync(task_state_repository.load_thread_task_state, thread_id, user_id)
     except RuntimeError as error:
         await release_active_thread(thread_id)
         raise HTTPException(status_code=503, detail=str(error)) from error
@@ -120,7 +124,7 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
 
     try:
         persisted = await to_thread.run_sync(
-            database.append_message, thread_id, user_id, "user", request.content
+            thread_repository.append_message, thread_id, user_id, "user", request.content
         )
     except Exception as error:
         await release_active_thread(thread_id)
@@ -132,7 +136,7 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
     if not stored_messages:
         try:
-            await to_thread.run_sync(database.set_auto_title_if_empty, thread_id, user_id, request.content)
+            await to_thread.run_sync(thread_repository.set_auto_title_if_empty, thread_id, user_id, request.content)
         except RuntimeError as error:
             await release_active_thread(thread_id)
             raise HTTPException(status_code=503, detail=str(error)) from error
@@ -149,13 +153,13 @@ async def stream_chat(thread_id: UUID, request: ChatRequest) -> StreamingRespons
         except Exception as error:
             print(f"long-term memory recall failed: {error}")
         stored_context_messages = await to_thread.run_sync(
-            database.load_stored_messages, thread_id, user_id
+            thread_repository.load_stored_messages, thread_id, user_id
         )
         if stored_context_messages is None:
             await release_active_thread(thread_id)
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
         thread_summary = await to_thread.run_sync(
-            database.load_thread_summary, thread_id, user_id
+            summary_repository.load_thread_summary, thread_id, user_id
         )
         token_counter = create_token_counter(settings)
         compilation = await compile_thread_context(
@@ -217,7 +221,7 @@ async def resume_chat(thread_id: UUID, request: ResumeRequest) -> StreamingRespo
         active_threads.add(thread_id)
     user_id = _user_id_from_auth_data(_auth_data_from_payload(None))
     try:
-        task_state = await to_thread.run_sync(database.load_thread_task_state, thread_id, user_id)
+        task_state = await to_thread.run_sync(task_state_repository.load_thread_task_state, thread_id, user_id)
     except RuntimeError as error:
         await release_active_thread(thread_id)
         raise HTTPException(status_code=503, detail=str(error)) from error

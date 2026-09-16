@@ -19,7 +19,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
-from app import database
+from app.db.repositories import task_state_repository
 from app.action_errors import ActionError
 from app.action_gateway import ActionGateway, ActionResult
 from app.ontology import get_action_registry
@@ -356,7 +356,7 @@ def _create_domain_agent(
         if owner is None:
             return
         thread_id, user_id = owner
-        await to_thread.run_sync(database.finish_thread_task, thread_id, user_id, status)
+        await to_thread.run_sync(task_state_repository.finish_thread_task, thread_id, user_id, status)
 
     async def call_model(state: DomainGraphState) -> dict[str, list[Any]]:
         """调用领域模型并追加一条模型消息。"""
@@ -396,7 +396,7 @@ def _create_domain_agent(
         if owner is not None:
             thread_id, user_id = owner
             persisted = await to_thread.run_sync(
-                database.set_pending_thread_actions,
+                task_state_repository.set_pending_thread_actions,
                 thread_id,
                 user_id,
                 pending_actions,
@@ -420,7 +420,7 @@ def _create_domain_agent(
         if owner is not None:
             thread_id, user_id = owner
             resolved = await to_thread.run_sync(
-                database.resolve_thread_task_approval,
+                task_state_repository.resolve_thread_task_approval,
                 thread_id,
                 user_id,
                 approved,

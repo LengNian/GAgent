@@ -6,7 +6,8 @@ from datetime import UTC, datetime
 
 from anyio import to_thread
 
-from app import database
+from app.db.models import LongTermMemoryRecallCandidate
+from app.db.repositories import long_term_memory_repository
 from app.long_term_memory_policy import is_single_value_long_term_memory_attribute
 from app.memory.embedding_service import embed_long_term_memory
 from app.settings import Settings
@@ -65,12 +66,13 @@ def format_long_term_memory_groups(groups: list[RecalledLongTermMemoryGroup]) ->
 class LongTermMemoryRecallResult:
     """一次长期记忆召回的粗排候选和最终 TopN 属性组。"""
 
-    candidates: list[database.LongTermMemoryRecallCandidate]
+    candidates: list[LongTermMemoryRecallCandidate]
     top_groups: list[RecalledLongTermMemoryGroup]
 
 
+# 计算候选记忆的得分
 def _score_candidates(
-    candidates: list[database.LongTermMemoryRecallCandidate],
+    candidates: list[LongTermMemoryRecallCandidate],
     settings: Settings,
     now: datetime | None = None,
 ) -> list[RecalledLongTermMemory]:
@@ -84,6 +86,7 @@ def _score_candidates(
     # =========================================================================
     current_time = now or datetime.now(UTC)
     scored: list[RecalledLongTermMemory] = []
+
     for candidate in candidates:
         used_at = candidate.effective_last_used_at
         if used_at.tzinfo is None:
@@ -93,13 +96,17 @@ def _score_candidates(
         if decay_setting_name is None:
             continue
         recency = math.exp(-getattr(settings, decay_setting_name) * interval_days)
+
         relevance = max(0, min(1, 1 - candidate.cosine_distance / 2))
+
         importance_score = candidate.importance / 10
+
         score = (
             relevance * settings.long_term_memory_recall_relevance_weight
             + importance_score * settings.long_term_memory_recall_importance_weight
             + recency * settings.long_term_memory_recall_recency_weight
         )
+
         if score >= settings.long_term_memory_recall_min_score:
             scored.append(
                 RecalledLongTermMemory(
@@ -117,6 +124,7 @@ def _score_candidates(
     return sorted(scored, key=lambda memory: memory.score, reverse=True)
 
 
+# 按每组最高分筛代表 → 按代表分取前 N 个组 → 把这 N 个组的全部有效内容取出来
 def _select_top_group_representatives(
     memories: list[RecalledLongTermMemory],
     settings: Settings,
@@ -140,6 +148,7 @@ def _select_top_group_representatives(
     ]
 
 
+# 返回粗排和细排的结果
 async def recall_long_term_memories(
     user_id: str,
     query: str,
@@ -160,7 +169,7 @@ async def recall_long_term_memories(
 
     query_embedding = await to_thread.run_sync(embed_long_term_memory, normalized_query, settings)
     candidates = await to_thread.run_sync(
-        database.load_long_term_memory_recall_candidates,
+        long_term_memory_repository.load_long_term_memory_recall_candidates,
         user_id,
         settings.long_term_memory_embedding_model,
         query_embedding,
@@ -169,9 +178,11 @@ async def recall_long_term_memories(
     scored_memories = _score_candidates(candidates, settings)
     representatives = _select_top_group_representatives(scored_memories, settings)
     groups: list[RecalledLongTermMemoryGroup] = []
+
+
     for representative in representatives:
         contents = await to_thread.run_sync(
-            database.load_active_long_term_memory_group,
+            long_term_memory_repository.load_active_long_term_memory_group,
             user_id,
             representative.memory_type,
             representative.subject,

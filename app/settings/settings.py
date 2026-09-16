@@ -99,6 +99,15 @@ class Settings(BaseSettings):
         ge=0,
         le=2,
     )
+    long_term_memory_conflict_resolution_enabled: bool = Field(
+        default=True,
+        validation_alias="LONG_TERM_MEMORY_CONFLICT_RESOLUTION_ENABLED",
+    )
+    long_term_memory_conflict_candidate_limit: int = Field(
+        default=5,
+        validation_alias="LONG_TERM_MEMORY_CONFLICT_CANDIDATE_LIMIT",
+        ge=1,
+    )
     long_term_memory_recall_enabled: bool = Field(
         default=True, validation_alias="LONG_TERM_MEMORY_RECALL_ENABLED"
     )

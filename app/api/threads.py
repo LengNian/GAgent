@@ -7,7 +7,7 @@ from anyio import to_thread
 from fastapi import APIRouter, Body, HTTPException, status
 from app.api.agent import _DEFAULT_AUTH_DATA, _auth_data_from_payload, _user_id_from_auth_data
 from app.api.schemas.threads import ThreadCreatedResponse, ThreadSummaryResponse, ThreadTitleRequest
-from app import database
+from app.db.repositories import thread_repository
 router = APIRouter(prefix="/api/threads", tags=["threads"])
 
 
@@ -26,7 +26,7 @@ async def create_thread(payload: dict[str, Any] | None = Body(default=None)) -> 
     thread_id = uuid4()
     user_id = _user_id_from_auth_data(_auth_data_from_payload(payload))
     try:
-        await to_thread.run_sync(database.create_thread, thread_id, user_id)
+        await to_thread.run_sync(thread_repository.create_thread, thread_id, user_id)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return ThreadCreatedResponse(thread_id=thread_id)
@@ -37,7 +37,7 @@ async def list_user_threads(payload: dict[str, Any] | None = Body(default=None))
     """返回当前用户的会话列表。"""
     user_id = _user_id_from_auth_data(_auth_data_from_payload(payload))
     try:
-        rows = await to_thread.run_sync(database.list_threads, user_id)
+        rows = await to_thread.run_sync(thread_repository.list_threads, user_id)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     return [
@@ -53,7 +53,7 @@ async def update_thread_title(thread_id: UUID, request: ThreadTitleRequest):
     """设置或清除当前用户会话标题。"""
     user_id = _user_id_from_auth_data(_DEFAULT_AUTH_DATA)
     try:
-        updated = await to_thread.run_sync(database.update_thread_title, thread_id, user_id, request.title)
+        updated = await to_thread.run_sync(thread_repository.update_thread_title, thread_id, user_id, request.title)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     if not updated:
@@ -66,7 +66,7 @@ async def delete_user_thread(thread_id: UUID) -> None:
     """删除当前用户拥有的会话及其数据库级联关联数据。"""
     user_id = _user_id_from_auth_data(_DEFAULT_AUTH_DATA)
     try:
-        deleted = await to_thread.run_sync(database.delete_thread, thread_id, user_id)
+        deleted = await to_thread.run_sync(thread_repository.delete_thread, thread_id, user_id)
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     if not deleted:

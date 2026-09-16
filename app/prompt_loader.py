@@ -75,3 +75,14 @@ def get_long_term_memory_extraction_prompt() -> str:
     if not memory_prompt:
         raise ValueError("Long-term memory extraction prompt cannot be empty")
     return memory_prompt
+
+
+def get_long_term_memory_conflict_prompt() -> str:
+    """加载长期记忆冲突判断 Prompt。"""
+
+    conflict_prompt = resolve_prompt_path("prompts/long_term_memory_conflict.md").read_text(
+        encoding="utf-8"
+    ).strip()
+    if not conflict_prompt:
+        raise ValueError("Long-term memory conflict prompt cannot be empty")
+    return conflict_prompt

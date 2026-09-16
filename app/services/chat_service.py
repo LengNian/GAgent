@@ -11,7 +11,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 from langgraph.errors import GraphInterrupt
 
-from app import database
+from app.db.repositories import long_term_memory_repository, thread_repository
 from app.agent import create_agent
 from app.checkpoint import get_checkpointer
 from app.debug import print_model_messages
@@ -238,7 +238,7 @@ async def _stream_reply(
             event_data = event.get("data") or {}
             if event_name == "on_chat_model_start" and injected_groups and not memories_touched:
                 await to_thread.run_sync(
-                    database.touch_long_term_memory_groups,
+                    long_term_memory_repository.touch_long_term_memory_groups,
                     user_id,
                     injected_groups,
                 )
@@ -399,7 +399,7 @@ async def _stream_reply(
         messages.append(AIMessage(content=assistant_text))
         if user_id is not None:
             assistant_persisted = await to_thread.run_sync(
-                database.append_message, thread_id, user_id, "assistant", assistant_text
+                thread_repository.append_message, thread_id, user_id, "assistant", assistant_text
             )
             if assistant_persisted:
                 _schedule_long_term_memory_extraction(thread_id, user_id, assistant_persisted)

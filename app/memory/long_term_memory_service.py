@@ -3,7 +3,7 @@
 import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 import json
 import logging
@@ -16,16 +16,22 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field, model_validator
 
-from app import database
-from app.database import LongTermMemoryInput, StoredMessage
+from app.db.repositories import long_term_memory_repository
+from app.db.models import LongTermMemoryInput, StoredMessage
+from app.long_term_memory_policy import is_single_value_long_term_memory_attribute
 from app.memory.embedding_service import embed_long_term_memory
-from app.prompt_loader import get_long_term_memory_extraction_prompt
+from app.prompt_loader import (
+    get_long_term_memory_conflict_prompt,
+    get_long_term_memory_extraction_prompt,
+)
 from app.settings import Settings
 
 
 logger = logging.getLogger(__name__)
 
 
+# 同一线程可能并发触发多次抽取（例如一轮回复后、又补一轮）。
+# 若不串行化，两次任务可能同时读游标、同时推进游标，导致重叠窗口重复抽取或游标错乱
 @dataclass
 class _ThreadExtractionLockState:
     """同一线程长期记忆抽取锁及其已登记任务数量。"""
@@ -63,7 +69,7 @@ async def _hold_thread_extraction_lock(thread_id: UUID) -> AsyncIterator[None]:
             if state.users == 0 and _thread_extraction_locks.get(thread_id) is state:
                 del _thread_extraction_locks[thread_id]
 
-
+# 记忆类型
 _ATTRIBUTES_BY_TYPE: dict[str, frozenset[str]] = {
     "profile": frozenset({"name", "residence", "occupation", "organization", "long_term_goal"}),
     "preference": frozenset(
@@ -98,6 +104,24 @@ class LongTermMemoryExtraction(BaseModel):
     memories: list[LongTermMemoryCandidate] = Field(default_factory=list)
 
 
+class LongTermMemoryConflictDecision(BaseModel):
+    """新记忆与相关旧记忆之间的结构化关系判断。"""
+
+    action: Literal["ADD", "DUPLICATE", "UPDATE"]
+    matched_memory_ids: list[int] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def matched_ids_must_match_action(self) -> "LongTermMemoryConflictDecision":
+        """确保新增操作不携带旧 ID，重复或更新操作必须明确目标。"""
+
+        if self.action == "ADD" and self.matched_memory_ids:
+            raise ValueError("ADD cannot contain matched memory IDs")
+        if self.action != "ADD" and not self.matched_memory_ids:
+            raise ValueError("DUPLICATE and UPDATE require matched memory IDs")
+        return self
+
+
+# 提取记忆使用的llm
 def _build_memory_extraction_model(settings: Settings) -> ChatOpenAI:
     """创建不绑定工具的长期记忆抽取模型。"""
 
@@ -117,6 +141,102 @@ def _build_memory_extraction_model(settings: Settings) -> ChatOpenAI:
     if settings.llm_base_url:
         model_kwargs["base_url"] = settings.llm_base_url
     return ChatOpenAI(**model_kwargs)
+
+
+async def _resolve_memory_conflicts(
+    user_id: str,
+    memories: list[LongTermMemoryInput],
+    embeddings: list[list[float] | None] | None,
+    settings: Settings,
+    resolver: Any | None = None,
+) -> tuple[list[LongTermMemoryInput], list[list[float] | None] | None]:
+    """识别多值记忆中的重复或状态更新，并绑定待停用的旧记忆 ID。
+
+    Args:
+        user_id: 当前用户标识。
+        memories: 已通过证据与长度校验的新记忆。
+        embeddings: 与 memories 同序的候选向量；Embedding 关闭时为 None。
+        settings: 长期记忆冲突判断与模型配置。
+        resolver: 测试时注入的结构化冲突判断模型。
+    Returns:
+        过滤重复并标记替代目标后的记忆及其同序向量。
+    """
+
+    # =========================================================================
+    # [逻辑规划]
+    # 1. 功能关闭、无向量或单值属性时保持现有流程；单值属性已有确定替代规则。
+    # 2. 对每条多值记忆查询同组最相关旧记忆，避免把整个偏好组交给模型。
+    # 3. 使用受控 schema 判断 ADD、DUPLICATE、UPDATE，并校验返回 ID 属于候选集合。
+    # 4. DUPLICATE 丢弃新候选；UPDATE 绑定旧 ID；判断异常时保守保留为 ADD。
+    # 5. 始终同步过滤向量列表，保证后续事务中的索引对应关系不发生错位。
+    # =========================================================================
+    if not getattr(settings, "long_term_memory_conflict_resolution_enabled", False):
+        return memories, embeddings
+    if embeddings is None:
+        return memories, embeddings
+
+    structured_resolver = resolver
+    resolved_memories: list[LongTermMemoryInput] = []
+    resolved_embeddings: list[list[float] | None] = []
+    
+    for memory, embedding in zip(memories, embeddings, strict=True):
+        if embedding is None or is_single_value_long_term_memory_attribute(memory.attribute):
+            resolved_memories.append(memory)
+            resolved_embeddings.append(embedding)
+            continue
+
+        try:
+            candidates = await to_thread.run_sync(
+                long_term_memory_repository.load_long_term_memory_conflict_candidates,
+                user_id,
+                memory,
+                settings.long_term_memory_embedding_model,
+                embedding,
+                settings.long_term_memory_conflict_candidate_limit,
+            )
+            if not candidates:
+                resolved_memories.append(memory)
+                resolved_embeddings.append(embedding)
+                continue
+
+            if structured_resolver is None:
+                structured_resolver = _build_memory_extraction_model(settings).with_structured_output(
+                    LongTermMemoryConflictDecision,
+                    method="function_calling",
+                )
+            decision = await structured_resolver.ainvoke(
+                [
+                    SystemMessage(content=get_long_term_memory_conflict_prompt()),
+                    HumanMessage(
+                        content=json.dumps(
+                            {
+                                "new_memory": memory.content,
+                                "existing_memories": [
+                                    {"memory_id": candidate.memory_id, "content": candidate.content}
+                                    for candidate in candidates
+                                ],
+                            },
+                            ensure_ascii=False,
+                        )
+                    ),
+                ]
+            )
+            if not isinstance(decision, LongTermMemoryConflictDecision):
+                raise ValueError("Conflict resolver returned an invalid result")
+            candidate_ids = {candidate.memory_id for candidate in candidates}
+            matched_ids = tuple(dict.fromkeys(decision.matched_memory_ids))
+            if not set(matched_ids).issubset(candidate_ids):
+                raise ValueError("Conflict resolver returned an unknown memory ID")
+            if decision.action == "DUPLICATE":
+                continue
+            if decision.action == "UPDATE":
+                memory = replace(memory, superseded_memory_ids=matched_ids)
+        except Exception:
+            logger.exception("long_term_memory_conflict_resolution_failed")
+
+        resolved_memories.append(memory)
+        resolved_embeddings.append(embedding)
+    return resolved_memories, resolved_embeddings
 
 
 def _messages_payload(messages: list[StoredMessage]) -> str:
@@ -221,6 +341,7 @@ async def extract_and_persist_long_term_memories(
     settings: Settings,
     extractor: Any | None = None,
     embedder: Any | None = None,
+    conflict_resolver: Any | None = None,
     through_seq: int | None = None,
 ) -> int:
     """从最近完成的对话增量抽取候选记忆并受控写入数据库。
@@ -231,6 +352,7 @@ async def extract_and_persist_long_term_memories(
         settings: 已校验的运行配置。
         extractor: 测试时注入的已结构化输出模型；默认创建生产模型。
         embedder: 测试时注入的向量生成函数；默认使用本地 BGE 模型。
+        conflict_resolver: 测试时注入的新旧记忆关系判断模型。
     Returns:
         实际新增的长期记忆数量；抽取或校验失败时返回 0。
     """
@@ -244,19 +366,22 @@ async def extract_and_persist_long_term_memories(
     # 5. 仅为本次新增记忆生成向量；Embedding 失败不回滚已持久化的原文和证据。
     # 6. 此函数的异常不会向聊天主流程传播，保证主回复已完成后仍可正常交付。
     # =========================================================================
+
     if not settings.long_term_memory_enabled or through_seq is None:
         return 0
 
     async with _hold_thread_extraction_lock(thread_id):
         try:
             batch = await to_thread.run_sync(
-                database.load_incremental_long_term_memory_messages,
+                long_term_memory_repository.load_incremental_long_term_memory_messages,
                 thread_id,
                 user_id,
                 through_seq,
             )
+
             if batch is None:
                 return 0
+
             messages, _processed_seq = batch
             if not messages:
                 return 0
@@ -277,13 +402,16 @@ async def extract_and_persist_long_term_memories(
                 logger.warning("long_term_memory_extraction_invalid_result")
                 return 0
 
-            memory_inputs = _validated_memory_inputs(result, messages, settings)
+            memory_inputs: list[LongTermMemoryInput] = _validated_memory_inputs(result, messages, settings)
+
             persisted_memories = []
+
             if memory_inputs:
                 candidate_embeddings: list[list[float] | None] | None = None
                 if settings.long_term_memory_embedding_enabled:
                     embedding_function = embedder or embed_long_term_memory
                     candidate_embeddings = []
+
                     for memory in memory_inputs:
                         try:
                             embedding = await asyncio.wait_for(
@@ -299,26 +427,46 @@ async def extract_and_persist_long_term_memories(
                         except Exception:
                             logger.exception("long_term_memory_embedding_failed")
                             embedding = None
+
                         candidate_embeddings.append(embedding)
-                persisted_memories = await to_thread.run_sync(
-                    partial(
-                        database.merge_long_term_memories,
+
+                memory_inputs, candidate_embeddings = await _resolve_memory_conflicts(
+                    user_id,
+                    memory_inputs,
+                    candidate_embeddings,
+                    settings,
+                    conflict_resolver,
+                )
+
+                if memory_inputs:
+                    persisted_memories = await to_thread.run_sync(
+                        partial(
+                            long_term_memory_repository.merge_long_term_memories,
+                            thread_id,
+                            user_id,
+                            memory_inputs,
+                            through_seq,
+                            memory_embeddings=candidate_embeddings,
+                            embedding_model=settings.long_term_memory_embedding_model,
+                            semantic_dedup_enabled=(
+                                settings.long_term_memory_semantic_dedup_enabled
+                                and settings.long_term_memory_embedding_enabled
+                            ),
+                            semantic_dedup_distance=settings.long_term_memory_semantic_dedup_distance,
+                        )
+                    )
+                else:
+                    cursor_advanced = await to_thread.run_sync(
+                        long_term_memory_repository.advance_long_term_memory_cursor,
                         thread_id,
                         user_id,
-                        memory_inputs,
                         through_seq,
-                        memory_embeddings=candidate_embeddings,
-                        embedding_model=settings.long_term_memory_embedding_model,
-                        semantic_dedup_enabled=(
-                            settings.long_term_memory_semantic_dedup_enabled
-                            and settings.long_term_memory_embedding_enabled
-                        ),
-                        semantic_dedup_distance=settings.long_term_memory_semantic_dedup_distance,
                     )
-                )
+                    if not cursor_advanced:
+                        raise RuntimeError("Long-term memory cursor update failed")
             else:
                 cursor_advanced = await to_thread.run_sync(
-                    database.advance_long_term_memory_cursor,
+                    long_term_memory_repository.advance_long_term_memory_cursor,
                     thread_id,
                     user_id,
                     through_seq,
