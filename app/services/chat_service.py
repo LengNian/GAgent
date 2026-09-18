@@ -265,6 +265,8 @@ async def _stream_reply(
                 )
                 break
             run_id = str(event.get("run_id") or "")
+            event_tags = event.get("tags") or []
+            is_tool_planning = "tool_planning" in event_tags
             if event_name == "on_chain_end" and node_name == "supervisor":
                 output = event_data.get("output")
                 if not isinstance(output, dict):
@@ -374,7 +376,7 @@ async def _stream_reply(
                 continue
 
             if event_name == "on_chat_model_stream":
-                if node_name == "report":
+                if node_name == "report" or is_tool_planning:
                     continue
                 text = _chunk_text(event_data.get("chunk"))
                 if not text:
@@ -385,7 +387,7 @@ async def _stream_reply(
                 continue
 
             if event_name == "on_chat_model_end" and run_id not in streamed_model_runs:
-                if node_name == "report":
+                if node_name == "report" or is_tool_planning:
                     continue
                 text = _chunk_text(event_data.get("output"))
                 if text and not getattr(event_data.get("output"), "tool_calls", None):

@@ -1,10 +1,4 @@
-"""读取并校验 Agent manifest 及其 Action allowlist。"""
-""" 
-    快速近似对应：
-        涉及到agent, agent_manifest -- agents.yaml
-        涉及到ontology -- actions.yaml
-        涉及到tools, executor -- tools.yaml
-"""
+"""读取并校验 Agent manifest 及其 MCP 工具 allowlist。"""
 
 
 from functools import lru_cache
@@ -12,10 +6,6 @@ from pathlib import Path
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
-
-from app.ontology import get_action_registry
-from app.tools.config import get_tools_config
-
 
 AGENTS_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "agents.yaml"
 
@@ -59,9 +49,8 @@ def get_agents_config() -> AgentsConfig:
 
     逻辑规划：
     1. 读取 YAML 并校验每个 manifest 的身份、运行限制和 allowlist 类型。
-    2. 确认 allowlist 中的 Action 已注册，避免 Agent 声明无法执行的能力。
-    3. 确认 Action 引用的底层执行器存在且已启用，阻止配置加载后出现权限幻觉。
-    4. 返回缓存配置；后续工具构建只从已校验 manifest 获取 Action 范围。
+    2. 确认 allowlist 中的工具已在 gateways.yaml 声明，避免能力配置不一致。
+    3. 返回缓存配置；后续工具构建只从已校验 manifest 获取工具范围。
     """
 
     if not AGENTS_CONFIG_PATH.is_file():
@@ -77,22 +66,30 @@ def get_agents_config() -> AgentsConfig:
     for agent in config.agents:
         resolve_prompt_path(agent.prompt)
 
-    # 获得所有可用的action
-    action_registry = get_action_registry()
-    enabled_executors = {tool.name for tool in get_tools_config().tools if tool.enabled}
-    executor_configs = {tool.name: tool for tool in get_tools_config().tools}
+    # 工具来源已切换为 MCP 网关：allowlist 只需对照网关配置中的工具本地名
+    # （网关工具名带平台前缀，如 nms.query_device_by_ip）。发现配置缺失立即
+    # 拒绝启动，避免 Agent 声明无法执行的能力。
+    from mcp_gateway.config_loader import load_gateway_settings
 
-    #检查agents的allow_actions与tools里的工具是否一致
+    gateway_settings = load_gateway_settings(_gateway_config_path())
+    gateway_local_names = {
+        api.name for platform in gateway_settings.platforms for api in platform.apis
+    }
+
     for agent in config.agents:
-        for action_name in agent.allowed_actions:
-            action = action_registry.get(action_name)
-            executor_config = executor_configs.get(action.executor)
-            if action.executor not in enabled_executors or executor_config is None:
-                raise ValueError(
-                    f"Agent {agent.agent_id} Action {action_name} references "
-                    f"disabled or missing executor: {action.executor}"
-                )
+        missing = [name for name in agent.allowed_actions if name not in gateway_local_names]
+        if missing:
+            raise ValueError(
+                f"Agent {agent.agent_id} allowlist references tools missing "
+                f"from gateway config: {missing}"
+            )
     return config
+
+
+def _gateway_config_path() -> str:
+    """返回网关配置文件路径（与网关进程默认路径一致）。"""
+
+    return str(AGENTS_CONFIG_PATH.parent / "gateways.yaml")
 
 
 @lru_cache(maxsize=None)

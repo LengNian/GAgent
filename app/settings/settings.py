@@ -23,7 +23,8 @@ class Settings(BaseSettings):
     llm_base_url: str | None = Field(default=None, validation_alias="LLM_BASE_URL")
     llm_temperature: float = Field(validation_alias="LLM_TEMPERATURE")
     llm_timeout_seconds: float = Field(validation_alias="LLM_TIMEOUT_SECONDS")
-    nms_api_base_url: str = Field(validation_alias="NMS_API_BASE_URL")
+    mcp_gateway_url: str = Field(validation_alias="MCP_GATEWAY_URL")
+    mcp_gateway_token: SecretStr = Field(validation_alias="MCP_GATEWAY_TOKEN")
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
     context_max_tokens: int = Field(default=12000, validation_alias="CONTEXT_MAX_TOKENS", ge=1)
     context_max_message_tokens: int = Field(
@@ -104,7 +105,7 @@ class Settings(BaseSettings):
         validation_alias="LONG_TERM_MEMORY_CONFLICT_RESOLUTION_ENABLED",
     )
     long_term_memory_conflict_candidate_limit: int = Field(
-        default=5,
+        default=10,
         validation_alias="LONG_TERM_MEMORY_CONFLICT_CANDIDATE_LIMIT",
         ge=1,
     )
@@ -157,20 +158,20 @@ class Settings(BaseSettings):
         default=True, validation_alias="LLM_TOKENIZER_TRUST_REMOTE_CODE"
     )
 
-    @field_validator("nms_api_base_url")
+    @field_validator("mcp_gateway_url")
     @classmethod
-    def nms_api_base_url_must_use_http(cls, value: str) -> str:
-        """校验 NMS 服务基础地址。
+    def mcp_gateway_url_must_use_http(cls, value: str) -> str:
+        """校验 MCP 网关地址。
 
         逻辑规划：
         1. 去除首尾空白，避免请求地址因配置格式错误而失效。
         2. 只允许 HTTP 或 HTTPS 地址，拒绝缺少协议或其他协议的地址。
-        3. 移除末尾斜杠，使后续 HTTP 客户端拼接相对路径时行为一致。
+        3. 移除末尾斜杠，使客户端拼接 MCP 路径时行为一致。
         """
 
         value = value.strip().rstrip("/")
         if not value.startswith(("http://", "https://")):
-            raise ValueError("NMS_API_BASE_URL must start with http:// or https://")
+            raise ValueError("MCP_GATEWAY_URL must start with http:// or https://")
         return value
 
     @model_validator(mode="after")

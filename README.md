@@ -10,7 +10,7 @@
 - **模型**：OpenAI 兼容接口（当前接入智谱 BigModel，见 `config/.env`）
 - **数据库**：PostgreSQL（`threads/messages` 已接入）；pgvector 表和检索流程已设计，尚未接入
 - **数据访问 / 迁移**：`psycopg_pool` 同步连接池（通过线程池调用）；SQLAlchemy (async) / Alembic 计划接入
-- **配置**：Pydantic Settings + `.env` + `tools.yaml`
+- **配置**：Pydantic Settings + `.env` + `gateways.yaml`
 
 ## 环境要求
 
@@ -22,7 +22,7 @@
 
 ```
 app/             # 应用代码（agent 编排、API、配置、数据访问）
-config/          # .env 与 tools.yaml 等配置文件
+config/          # .env、agents.yaml 与 gateways.yaml
 database/        # PostgreSQL 业务表基线 SQL（当前运行时读写 threads/messages）
 doc/             # PRD 等产品文档
 tests/           # 测试用例

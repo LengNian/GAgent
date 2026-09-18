@@ -1,0 +1,141 @@
+# MCP 网关配置：中台清单 × API 映射表
+# 约定：
+# - 所有敏感值（base_url、账号密码）一律写 env:VAR_NAME，绝不落明文；
+# - description 是模型选择工具的唯一依据，必须写清"做什么、什么时候用"；
+# - 接入新中台只需在 platforms 下追加一节，不改网关代码。
+
+platforms:
+  - name: nms
+    base_url_env: env:NMS_BASE_URL
+    auth:
+      type: login_token
+      login_endpoint: /api/v1/iam/login
+      refresh_endpoint: /api/v1/iam/refresh
+      username_env: env:NMS_USERNAME
+      password_env: env:NMS_PASSWORD
+      token_field: data.access_token
+      refresh_token_field: data.refresh_token
+      expires_in_field: data.expires_in
+    apis:
+      - name: query_device_by_ip
+        description: 根据 IPv4 地址查询设备的当前状态、资源使用情况、接口、邻居、温度和近期事件。当用户询问某台设备（给出 IP）的运行状况时使用。
+        method: GET
+        endpoint: /api/v1/topology/device
+        timeout_seconds: 10
+        retry_attempts: 2
+        risk_level: low
+        requires_confirmation: true
+        argument_locations:
+          ip: query
+        input_schema:
+          type: object
+          properties:
+            ip:
+              type: string
+              description: 要查询的设备 IPv4 地址，例如 192.168.1.76
+          required: [ip]
+        error_messages:
+          "404": 未找到该 IP 对应的设备。
+          "5xx": 设备查询服务暂时不可用，请稍后重试。
+      
+      - name: get_topology_graph
+        description: 获取全局网络拓扑聚合图，包含所有设备节点、链路及其状态。当用户询问整体网络结构、设备间连接关系或全网概况时使用。
+        method: GET
+        endpoint: /api/v1/topology/graph
+        timeout_seconds: 15
+        retry_attempts: 2
+        risk_level: low
+        argument_locations: {}
+        input_schema:
+          type: object
+          properties: {}
+          required: []
+        error_messages:
+          "5xx": 拓扑服务暂时不可用，请稍后重试。
+      
+      - name: get_realtime_metric
+        description: 查询指定设备 IP 上某个监控指标的实时瞬时值，可选按速率计算（如流量速率）。当用户询问某设备某指标的当前数值时使用。
+        method: GET
+        endpoint: /api/v1/metric/metrics/realtime
+        timeout_seconds: 10
+        retry_attempts: 2
+        risk_level: low
+        argument_locations:
+          ip: query
+          metric: query
+          rate: query
+        input_schema:
+          type: object
+          properties:
+            ip:
+              type: string
+              description: 设备 IPv4 地址
+            metric:
+              type: string
+              description: 指标名称，例如 sysName、hrProcessorLoad、ifHCInOctets
+            rate:
+              type: boolean
+              description: 是否计算速率，仅对流类指标（如流量）有意义，默认 false
+          required: [ip, metric]
+        error_messages:
+          "404": 未找到该设备或指标。
+          "5xx": 指标查询服务暂时不可用，请稍后重试。
+          
+      - name: get_metric_range
+        description: 查询指定设备 IP 上某个监控指标的时间序列数据，默认返回最近 1 小时。当用户询问指标的历史趋势或时间段变化时使用。
+        method: GET
+        endpoint: /api/v1/metric/metrics/range
+        timeout_seconds: 15
+        retry_attempts: 2
+        risk_level: low
+        argument_locations:
+          ip: query
+          metric: query
+          start: query
+          end: query
+          step: query
+          rate: query
+        input_schema:
+          type: object
+          properties:
+            ip:
+              type: string
+              description: 设备 IPv4 地址
+            metric:
+              type: string
+              description: 指标名称
+            start:
+              type: string
+              description: 起始时间，可填 Unix 秒或相对时间（如 30m、1h、7d）；默认最近 1 小时。
+            end:
+              type: string
+              description: 结束时间，填 Unix 秒；默认当前时间。
+            step:
+              type: integer
+              description: 采样步长（秒）；默认 15。
+            rate:
+              type: boolean
+              description: 计数器类指标是否计算速率；默认 false。
+          required: [ip, metric]
+        error_messages:
+          "404": 未找到该设备或指标。
+          "5xx": 指标查询服务暂时不可用，请稍后重试。
+      
+      - name: list_metric_names
+        description: 列出指定设备（可按 IP 过滤）上可用的监控指标名称。当用户不知道有哪些指标可查、或需要确认指标名拼写时使用。
+        method: GET
+        endpoint: /api/v1/metric/metrics/list
+        timeout_seconds: 10
+        retry_attempts: 2
+        risk_level: low
+        argument_locations:
+          ip: query
+        input_schema:
+          type: object
+          properties:
+            ip:
+              type: string
+              description: 可选的设备 IPv4 过滤条件
+          required: []
+        error_messages:
+          "5xx": 指标服务暂时不可用，请稍后重试。

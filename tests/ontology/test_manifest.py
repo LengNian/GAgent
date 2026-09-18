@@ -17,14 +17,33 @@ class AgentManifestTests(unittest.TestCase):
         逻辑规划：
         1. 读取已校验的 IoT manifest。
         2. 确认其身份和 allowlist 与配置一致。
-        3. 按该身份构建工具，确认模型只获得 allowlist 中的工具。
+        3. 注入内存网关构建工具，确认模型只获得 allowlist 中的工具。
         """
 
-        manifest = get_agent_manifest("iot_agent")
-        tools = build_tools_for_agent(get_settings(), "iot_agent")
+        from unittest.mock import patch
 
-        self.assertEqual(manifest.allowed_actions, ["query_device_by_ip"])
-        self.assertEqual([tool.name for tool in tools], ["query_device_by_ip"])
+        from fastmcp import Client
+
+        from mcp_gateway.testing import create_in_memory_gateway
+
+        manifest = get_agent_manifest("iot_agent")
+        in_memory_gateway = create_in_memory_gateway()
+        with patch(
+            "app.tools.registry._create_client",
+            lambda url, token: Client(in_memory_gateway),
+        ):
+            tools = build_tools_for_agent(get_settings(), "iot_agent")
+
+        self.assertEqual(
+            manifest.allowed_actions,
+            ["query_device_by_ip", "get_topology_graph", "get_realtime_metric",
+             "get_metric_range", "list_metric_names"],
+        )
+        self.assertEqual(
+            [tool.name for tool in tools],
+            ["nms.query_device_by_ip", "nms.get_topology_graph", "nms.get_realtime_metric",
+             "nms.get_metric_range", "nms.list_metric_names"],
+        )
 
     def test_manifest_config_contains_iot_agent(self) -> None:
         """确认 manifest 根配置至少包含一个可用 Agent。"""

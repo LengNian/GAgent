@@ -20,9 +20,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel, Field, ValidationError
 
 from app.db.repositories import task_state_repository
-from app.action_errors import ActionError
-from app.action_gateway import ActionGateway, ActionResult
-from app.ontology import get_action_registry
+from app.action_result import ActionResult
 from app.prompt_loader import get_agent_prompt, get_report_prompt
 from app.agent_manifest import get_agent_manifest
 from app.settings import Settings, get_settings
@@ -224,26 +222,81 @@ async def _summarize_successful_action_result(
     return fallback
 
 
-# 倒着找最后一个ToolMessage，然后解析它的content
+async def _summarize_action_results(
+    results: list[ActionResult],
+    model: BaseChatModel,
+) -> str:
+    """使用 Report 模型汇总一轮中的全部工具结果。
+
+    逻辑规划：
+    1. 单个结果复用既有摘要路径，保证已有单工具行为不变。
+    2. 多个结果按执行顺序组织为 JSON 数组，供 Report 模型关联分析。
+    3. Report 模型异常时优先返回首个失败的确定性提示，避免宣称全部成功。
+    """
+
+    if len(results) == 1:
+        return await _summarize_successful_action_result(results[0], model)
+
+    report_input = json.dumps(
+        {
+            "results": [
+                {
+                    "ok": result.ok,
+                    "action_name": result.action_name,
+                    "data": result.data if result.ok else None,
+                    "error_code": result.error_code if not result.ok else None,
+                    "error_type": result.error_type if not result.ok else None,
+                    "message": result.message if not result.ok else None,
+                    "details": result.details if not result.ok else {},
+                }
+                for result in results
+            ]
+        },
+        ensure_ascii=False,
+    )
+    fallback_result = next((result for result in results if not result.ok), None)
+    fallback = (
+        _failure_report_message(fallback_result)
+        if fallback_result is not None
+        else "设备查询已完成，但结果摘要生成失败，请稍后重试。"
+    )
+    try:
+        response = await model.ainvoke(
+            [
+                SystemMessage(content=get_report_prompt()),
+                HumanMessage(content=report_input),
+            ]
+        )
+    except Exception:
+        logger.exception("Report model invocation failed for multiple actions")
+        return fallback
+
+    summary = getattr(response, "content", "")
+    return summary.strip() if isinstance(summary, str) and summary.strip() else fallback
+
+
 async def _report_message_for_messages(
     messages: list[Any],
     model: BaseChatModel,
 ) -> str:
-    """从最新 ToolMessage 读取结果并生成最终报告。
+    """读取全部 ToolMessage 结果并生成最终报告。
 
     逻辑规划：
-    1. 从尾部查找 ToolMessage，确保只消费 ToolNode 的实际输出。
-    2. 成功和失败结果都交给报告模型总结，模型不可用时使用安全兜底文案。
-    3. 没有工具结果或结果无法解析时返回保守提示，不回显原始内容。
+    1. 按执行顺序收集每次 ToolNode 追加的 ToolMessage。
+    2. 任一工具结果无法校验时停止汇总，避免部分数据被误报为完整结论。
+    3. 将全部成功和失败结果交给 Report 模型总结，模型不可用时使用安全兜底。
     """
 
-    for message in reversed(messages):
+    results: list[ActionResult] = []
+    for message in messages:
         if isinstance(message, ToolMessage):
             result = _action_result_from_tool_content(message.content)
             if result is None:
                 return "工具返回结果异常，无法确认本次设备查询是否完成。"
-            return await _summarize_successful_action_result(result, model)
-    return "未收到工具执行结果，无法确认本次设备查询是否完成。"
+            results.append(result)
+    if not results:
+        return "未收到工具执行结果，无法确认本次设备查询是否完成。"
+    return await _summarize_action_results(results, model)
 
 
 async def _invoke_domain_graph(
@@ -251,6 +304,7 @@ async def _invoke_domain_graph(
     agent_id: str,
     graph: Any,
     messages: list[Any],
+    config: RunnableConfig | None = None,
 ) -> dict[str, Any]:
     """按 Agent manifest 限制执行领域子图。
 
@@ -261,6 +315,8 @@ async def _invoke_domain_graph(
     """
 
     runtime = get_agent_manifest(agent_id).runtime
+    invocation_config = dict(config or {})
+    invocation_config["recursion_limit"] = runtime.max_steps
     try:
         async with asyncio.timeout(runtime.timeout_seconds):
             return await graph.ainvoke(
@@ -268,7 +324,7 @@ async def _invoke_domain_graph(
                     "context_messages": messages,
                     "execution_messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)],
                 },
-                config={"recursion_limit": runtime.max_steps},
+                config=invocation_config,
             )
     except TimeoutError as error:
         raise AgentExecutionLimitError(
@@ -296,13 +352,17 @@ def _create_domain_agent(
     逻辑规划：
     1. 根据 manifest 裁剪该 Agent 的 Action 工具集合。
     2. 将 Agent 专属 Prompt 注入模型上下文。
-    3. 对有工具的领域构建“领域模型 -> 工具 -> Report Node -> 结束”链路。
-    4. 没有工具调用时结束当前领域图，保留普通对话 Agent 的行为。
+    3. 对有工具的领域构建“领域模型 -> 工具 -> 领域模型”循环，直到模型不再调用工具。
+    4. 执行过工具后统一交给 Report Node 汇总；首次没有工具调用时直接结束。
     """
 
     tools = build_tools_for_agent(settings, agent_id)
     model_with_tools = model.bind_tools(tools) if tools else model
-    action_registry = get_action_registry()
+    tool_policies = {
+        tool.name: tool.metadata or {}
+        for tool in tools
+    }
+    tools_by_name = {tool.name: tool for tool in tools}
 
     def _task_owner(config: RunnableConfig) -> tuple[UUID, str] | None:
         """从不可见运行配置读取审批状态的会话归属。"""
@@ -318,7 +378,7 @@ def _create_domain_agent(
             return None
 
     def _validated_pending_actions(state: DomainGraphState) -> list[dict[str, Any]]:
-        """提取通过 Action 契约和前置条件校验的待确认调用。"""
+        """提取通过 MCP 审批策略和参数校验的待确认调用。"""
 
         messages = state.get("execution_messages", [])
         latest = messages[-1] if messages else None
@@ -328,23 +388,27 @@ def _create_domain_agent(
         for tool_call in tool_calls:
             if not isinstance(tool_call, dict):
                 continue
-            action_name = tool_call.get("name")
+            tool_name = str(tool_call.get("name") or "")
+            action_name = tool_name.rsplit(".", 1)[-1]
             arguments = tool_call.get("args")
-            if not isinstance(action_name, str) or not isinstance(arguments, dict):
+            policy = tool_policies.get(tool_name)
+            tool = tools_by_name.get(tool_name)
+            if not action_name or not isinstance(arguments, dict) or not policy or tool is None:
                 continue
             try:
-                action = action_registry.get(action_name)
-                validated_arguments = ActionGateway._validate_arguments(action, arguments)
-                ActionGateway._validate_preconditions(action, validated_arguments)
-            except (ActionError, KeyError):
+                # MCP 工具 schema 是审批前唯一的参数契约。
+                validated_arguments = tool.args_schema.model_validate(arguments).model_dump(
+                    exclude_none=True
+                )
+            except (ValidationError, ValueError):
                 continue
-            if action.requires_confirmation:
+            if policy.get("requires_confirmation"):
                 pending_actions.append(
                     {
-                        "action_name": action.name,
+                        "action_name": action_name,
                         "arguments": validated_arguments,
-                        "risk_level": action.risk_level,
-                        "description": action.description,
+                        "risk_level": policy.get("risk_level", "low"),
+                        "description": tool.description,
                     }
                 )
         return pending_actions
@@ -361,7 +425,24 @@ def _create_domain_agent(
     async def call_model(state: DomainGraphState) -> dict[str, list[Any]]:
         """调用领域模型并追加一条模型消息。"""
 
-        response = await model_with_tools.ainvoke(_messages_with_prompt(agent_id, state))
+        # =========================================================================
+        # [逻辑规划] 多轮工具调用决策
+        # =========================================================================
+        # 1. 依据当前 execution_messages 调用领域模型，首次调用由用户问题触发。
+        # 2. 已存在 ToolMessage 时，模型只负责决定是否发起下一次工具调用。
+        # 3. 为后续规划调用打上内部 tag，SSE 层不展示中间文本，最终结果交给 Report。
+        # =========================================================================
+        # 工具返回后的模型调用只负责决定下一步工具或结束；最终用户可见文本
+        # 始终由 Report Node 生成，因此通过 tag 让 SSE 层跳过其中间规划文本。
+        has_tool_result = any(
+            isinstance(message, ToolMessage)
+            for message in state.get("execution_messages", [])
+        )
+        config = {"tags": ["tool_planning"]} if has_tool_result else None
+        response = await model_with_tools.ainvoke(
+            _messages_with_prompt(agent_id, state),
+            config=config,
+        )
         return {"execution_messages": [response]}
 
     async def report(state: DomainGraphState, config: RunnableConfig) -> dict[str, list[Any]]:
@@ -431,16 +512,25 @@ def _create_domain_agent(
         return {} if approved else {"approval_rejected": True}
 
     def route_after_model(state: DomainGraphState) -> str:
-        """根据工具调用对应的 Action 元数据决定下一节点。"""
+        """根据模型是否继续调用工具决定下一节点。"""
 
+        # =========================================================================
+        # [逻辑规划] 循环结束条件
+        # =========================================================================
+        # 1. 模型仍有 ToolCall 时，先经过审批检查再执行 ToolNode。
+        # 2. 执行过工具且模型不再调用时，说明信息收集完成，进入 Report 汇总全部结果。
+        # 3. 首次模型回答没有工具调用时保持普通对话路径，直接结束。
+        # =========================================================================
         messages = state.get("execution_messages", [])
         latest = messages[-1] if messages else None
         tool_calls = getattr(latest, "tool_calls", []) or []
-        if not tool_calls:
-            return END
-        if _validated_pending_actions(state):
-            return "approval_gate"
-        return "tools"
+        if tool_calls:
+            if _validated_pending_actions(state):
+                return "approval_gate"
+            return "tools"
+        if any(isinstance(message, ToolMessage) for message in messages):
+            return "report"
+        return END
 
     def route_after_approval(state: DomainGraphState) -> str:
         """根据人工确认结果决定调用工具或交由报告节点结束。"""
@@ -457,14 +547,19 @@ def _create_domain_agent(
         graph.add_conditional_edges(
             "call_model",
             route_after_model,
-            {"approval_gate": "approval_gate", "tools": "tools", END: END},
+            {
+                "approval_gate": "approval_gate",
+                "tools": "tools",
+                "report": "report",
+                END: END,
+            },
         )
         graph.add_conditional_edges(
             "approval_gate",
             route_after_approval,
             {"tools": "tools", "report": "report"},
         )
-        graph.add_edge("tools", "report")
+        graph.add_edge("tools", "call_model")
         graph.add_edge("report", END)
     else:
         graph.add_edge("call_model", END)
@@ -494,11 +589,6 @@ def _create_orchestrated_agent(
         model=model,
         settings=settings,
     )
-    iot_graph = _create_domain_agent(
-        agent_id="iot_agent",
-        model=model,
-        settings=settings,
-    )
 
     async def call_supervisor(state: AgentGraphState) -> dict[str, object]:
         """调用 Supervisor 并保存结构化路由字段，不把路由结果写入对话消息。"""
@@ -521,6 +611,12 @@ def _create_orchestrated_agent(
             "confidence": decision.confidence,
             "decision_summary": decision.decision_summary,
         }
+
+    iot_graph = _create_domain_agent(
+        agent_id="iot_agent",
+        model=model,
+        settings=settings,
+    )
 
     def route_to_agent(state: AgentGraphState) -> str:
         """根据 Supervisor 结果选择唯一的领域 Agent 节点。"""
