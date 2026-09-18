@@ -18,12 +18,13 @@ class AgentRuntimeConfig(BaseModel):
 
 
 class AgentManifest(BaseModel):
-    """描述一个 Agent 身份、职责和允许使用的 Action。"""
+    """描述一个 Agent 身份、职责、Skill 和允许使用的 MCP 工具。"""
 
     # 小写蛇形id如iot_agent
     agent_id: str = Field(pattern=r"^[a-z][a-z0-9_]*$")
     description: str = Field(min_length=1)
     allowed_actions: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
     prompt: str = Field(min_length=1)
     runtime: AgentRuntimeConfig = Field(default_factory=AgentRuntimeConfig)
 
@@ -49,8 +50,9 @@ def get_agents_config() -> AgentsConfig:
 
     逻辑规划：
     1. 读取 YAML 并校验每个 manifest 的身份、运行限制和 allowlist 类型。
-    2. 确认 allowlist 中的工具已在 gateways.yaml 声明，避免能力配置不一致。
-    3. 返回缓存配置；后续工具构建只从已校验 manifest 获取工具范围。
+    2. 确认 Agent Prompt 和 Skill 文件都位于受控目录且存在。
+    3. 确认 allowlist 中的工具已在 gateways.yaml 声明，避免能力配置不一致。
+    4. 返回缓存配置；后续工具构建只从已校验 manifest 获取工具范围。
     """
 
     if not AGENTS_CONFIG_PATH.is_file():
@@ -61,10 +63,12 @@ def get_agents_config() -> AgentsConfig:
     # 验证agentid的唯一性
     config = AgentsConfig.model_validate(raw_config)
 
-    from app.prompt_loader import resolve_prompt_path
+    from app.prompt_loader import resolve_prompt_path, resolve_skill_path
 
     for agent in config.agents:
         resolve_prompt_path(agent.prompt)
+        for skill_name in agent.skills:
+            resolve_skill_path(skill_name)
 
     # 工具来源已切换为 MCP 网关：allowlist 只需对照网关配置中的工具本地名
     # （网关工具名带平台前缀，如 nms.query_device_by_ip）。发现配置缺失立即

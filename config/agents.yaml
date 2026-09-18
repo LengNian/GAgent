@@ -23,6 +23,8 @@ agents:
       - get_realtime_metric
       - get_metric_range
       - list_metric_names
+    skills:
+      - metric_trend_analysis
     prompt: prompts/iot_agent.md
     runtime:
       max_steps: 10

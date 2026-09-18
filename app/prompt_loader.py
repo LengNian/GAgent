@@ -7,6 +7,7 @@ from app.agent_manifest import AgentManifest, get_agent_manifest
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIRECTORY = PROJECT_ROOT / "prompts"
+SKILLS_DIRECTORY = PROJECT_ROOT / "skills"
 
 
 def resolve_prompt_path(prompt_reference: str) -> Path:
@@ -29,8 +30,28 @@ def resolve_prompt_path(prompt_reference: str) -> Path:
     return prompt_path
 
 
+def resolve_skill_path(skill_name: str) -> Path:
+    """将 Skill 名称解析为受控目录下的 ``SKILL.md``。
+
+    逻辑规划：
+    1. 只接受目录名，不把 manifest 值当作任意文件路径。
+    2. 将名称解析到项目内 skills 目录，拒绝路径逃逸。
+    3. 确认 Skill 文档存在且为普通文件，启动阶段尽早暴露配置错误。
+    """
+
+    skill_path = (SKILLS_DIRECTORY / skill_name / "SKILL.md").resolve()
+    skills_root = SKILLS_DIRECTORY.resolve()
+    try:
+        skill_path.relative_to(skills_root)
+    except ValueError as error:
+        raise ValueError("Skill must be located under the skills directory") from error
+    if not skill_path.is_file():
+        raise FileNotFoundError(f"Skill document not found: {skill_path}")
+    return skill_path
+
+
 def load_agent_prompt(manifest: AgentManifest) -> str:
-    """加载共享基础 Prompt 和指定 Agent Prompt。"""
+    """加载共享基础 Prompt、Agent Prompt 和 manifest 声明的 Skills。"""
 
     base_prompt_path = resolve_prompt_path("prompts/base.md")
     agent_prompt_path = resolve_prompt_path(manifest.prompt)
@@ -38,7 +59,14 @@ def load_agent_prompt(manifest: AgentManifest) -> str:
     agent_prompt = agent_prompt_path.read_text(encoding="utf-8").strip()
     if not base_prompt or not agent_prompt:
         raise ValueError(f"Agent prompt cannot be empty: {manifest.agent_id}")
-    return f"{base_prompt}\n\n{agent_prompt}"
+    skill_sections: list[str] = []
+    for skill_name in manifest.skills:
+        skill_content = resolve_skill_path(skill_name).read_text(encoding="utf-8").strip()
+        if not skill_content:
+            raise ValueError(f"Skill document cannot be empty: {skill_name}")
+        skill_sections.append(f"## Skill: {skill_name}\n\n{skill_content}")
+    sections = [base_prompt, agent_prompt, *skill_sections]
+    return "\n\n".join(sections)
 
 
 def get_agent_prompt(agent_id: str) -> str:

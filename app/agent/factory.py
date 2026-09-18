@@ -29,6 +29,9 @@ from app.tools.registry import build_tools_for_agent
 
 logger = logging.getLogger(__name__)
 
+# Report 模型只需要结果摘要所需的数据，不应接收完整的长时间序列。
+_REPORT_DATA_MAX_CHARS = 36000
+
 
 class RouteDecision(BaseModel):
     """Supervisor 输出的结构化路由结果。"""
@@ -70,6 +73,10 @@ class AgentExecutionLimitError(Exception):
         super().__init__(f"Agent {agent_id} exceeded {limit_type}: {limit_value}")
 
 
+class SupervisorRoutingError(Exception):
+    """Supervisor 未返回可用结构化路由结果。"""
+
+
 def _build_model(settings: Settings) -> BaseChatModel:
     """根据已校验配置创建聊天模型。"""
 
@@ -82,6 +89,37 @@ def _build_model(settings: Settings) -> BaseChatModel:
     if settings.llm_base_url:
         model_kwargs["base_url"] = settings.llm_base_url
     return ChatOpenAI(**model_kwargs)
+
+
+async def _invoke_route_decision(
+    supervisor_model: Any,
+    messages: list[Any],
+) -> RouteDecision:
+    """调用 Supervisor 并校验结构化路由结果，空结果最多重试一次。
+
+    逻辑规划：
+    1. 调用支持 function calling 的结构化模型。
+    2. 只有实际得到 RouteDecision 才允许继续路由，拒绝 None 或其他返回类型。
+    3. 空或非法结果重试一次；仍失败时抛出明确异常，禁止猜测目标 Agent。
+    """
+
+    for attempt in range(2):
+        try:
+            decision = await supervisor_model.ainvoke(messages)
+        except Exception:
+            if attempt == 1:
+                raise
+            logger.warning("supervisor_invocation_failed_retrying", exc_info=True)
+            continue
+        if isinstance(decision, RouteDecision):
+            return decision
+        logger.warning(
+            "supervisor_invalid_decision attempt=%s result_type=%s",
+            attempt + 1,
+            type(decision).__name__,
+        )
+
+    raise SupervisorRoutingError("Supervisor 未返回有效路由结果")
 
 
 def _messages_with_prompt(agent_id: str, state: AgentGraphState | DomainGraphState) -> list[Any]:
@@ -176,6 +214,72 @@ def _failure_report_message(result: ActionResult) -> str:
     return "当前操作未能完成，系统已阻止不可信结果返回。"
 
 
+def _compact_report_value(value: Any, remaining_chars: int) -> tuple[Any, bool]:
+    """在交给 Report 模型前限制工具结果体积。
+
+    逻辑规划：
+    1. 原始工具结果只读处理，不修改 ToolMessage 或数据库中的数据。
+    2. 对列表保留首尾样本，适合时间序列同时保留起点和最近状态。
+    3. 对对象递归裁剪；无法继续结构化裁剪时使用明确标记，避免请求超过模型窗口。
+    """
+
+    if remaining_chars <= 0:
+        return "[结果过大，已省略]", True
+    if isinstance(value, dict):
+        compacted: dict[str, Any] = {}
+        truncated = False
+        for key, item in value.items():
+            compacted_item, item_truncated = _compact_report_value(item, remaining_chars)
+            compacted[str(key)] = compacted_item
+            truncated = truncated or item_truncated
+            encoded_size = len(json.dumps(compacted, ensure_ascii=False))
+            if encoded_size > remaining_chars:
+                compacted.pop(str(key), None)
+                compacted["_truncated"] = "结果过大，部分字段已省略"
+                return compacted, True
+        return compacted, truncated
+    if isinstance(value, list):
+        if len(value) <= 20:
+            compacted_items: list[Any] = []
+            truncated = False
+            for item in value:
+                compacted_item, item_truncated = _compact_report_value(item, remaining_chars)
+                compacted_items.append(compacted_item)
+                truncated = truncated or item_truncated
+                if len(json.dumps(compacted_items, ensure_ascii=False)) > remaining_chars:
+                    compacted_items.pop()
+                    compacted_items.append("[后续数据已省略]")
+                    return compacted_items, True
+            return compacted_items, truncated
+        head = value[:10]
+        tail = value[-10:]
+        return [*head, "[中间数据已省略]", *tail], True
+    if isinstance(value, str) and len(value) > remaining_chars:
+        return value[: max(0, remaining_chars - 20)] + "...[已省略]", True
+    return value, False
+
+
+def _report_payload(result: ActionResult, max_chars: int = _REPORT_DATA_MAX_CHARS) -> dict[str, Any]:
+    """构造有大小上限的单个工具结果报告输入。"""
+
+    data, truncated = _compact_report_value(result.data if result.ok else None, max_chars)
+    payload = {
+        "ok": result.ok,
+        "action_name": result.action_name,
+        "data": data,
+        "error_code": result.error_code if not result.ok else None,
+        "error_type": result.error_type if not result.ok else None,
+        "message": result.message if not result.ok else None,
+        "details": result.details if not result.ok else {},
+    }
+    if truncated:
+        payload["data_notice"] = "工具结果过大，报告仅使用首尾代表性数据；如需完整数据请缩小查询范围。"
+    if len(json.dumps(payload, ensure_ascii=False)) > max_chars + 1200:
+        payload["data"] = "[结果过大，已省略]"
+        payload["data_notice"] = "工具结果过大，报告未使用完整数据；请缩小查询范围。"
+    return payload
+
+
 async def _summarize_successful_action_result(
     result: ActionResult,
     model: BaseChatModel,
@@ -188,18 +292,7 @@ async def _summarize_successful_action_result(
     3. 模型异常或返回空文本时使用安全兜底提示。
     """
 
-    report_input = json.dumps(
-        {
-            "ok": result.ok,
-            "action_name": result.action_name,
-            "data": result.data if result.ok else None,
-            "error_code": result.error_code if not result.ok else None,
-            "error_type": result.error_type if not result.ok else None,
-            "message": result.message if not result.ok else None,
-            "details": result.details if not result.ok else {},
-        },
-        ensure_ascii=False,
-    )
+    report_input = json.dumps(_report_payload(result), ensure_ascii=False)
     fallback = (
         _failure_report_message(result)
         if not result.ok
@@ -240,15 +333,7 @@ async def _summarize_action_results(
     report_input = json.dumps(
         {
             "results": [
-                {
-                    "ok": result.ok,
-                    "action_name": result.action_name,
-                    "data": result.data if result.ok else None,
-                    "error_code": result.error_code if not result.ok else None,
-                    "error_type": result.error_type if not result.ok else None,
-                    "message": result.message if not result.ok else None,
-                    "details": result.details if not result.ok else {},
-                }
+                _report_payload(result, max(2000, _REPORT_DATA_MAX_CHARS // len(results)))
                 for result in results
             ]
         },
@@ -597,7 +682,10 @@ def _create_orchestrated_agent(
         try:
             async with asyncio.timeout(runtime.timeout_seconds):
                 
-                decision = await supervisor_model.ainvoke(_messages_with_prompt("supervisor", state))
+                decision = await _invoke_route_decision(
+                    supervisor_model,
+                    _messages_with_prompt("supervisor", state),
+                )
         except TimeoutError as error:
             raise AgentExecutionLimitError(
                 "supervisor",

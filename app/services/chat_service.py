@@ -15,7 +15,7 @@ from app.db.repositories import long_term_memory_repository, thread_repository
 from app.agent import create_agent
 from app.checkpoint import get_checkpointer
 from app.debug import print_model_messages
-from app.agent.factory import AgentExecutionLimitError
+from app.agent.factory import AgentExecutionLimitError, SupervisorRoutingError
 from app.agent_manifest import get_agents_config
 from app.memory import extract_and_persist_long_term_memories
 from app.observability import log_event, reset_trace_id, set_trace_id
@@ -445,6 +445,16 @@ async def _stream_reply(
         yield _format_sse_event(
             "error",
             {"code": "agent_execution_limit", "message": message, "trace_id": trace_id},
+        )
+    except SupervisorRoutingError:
+        log_event(logger, logging.WARNING, "supervisor_routing_failed", thread_id=str(thread_id))
+        yield _format_sse_event(
+            "error",
+            {
+                "code": "supervisor_routing_failed",
+                "message": "暂时无法判断该请求应由哪个领域处理，请稍后重试或补充说明。",
+                "trace_id": trace_id,
+            },
         )
     except Exception:
         log_event(logger, logging.ERROR, "agent_request_failed", thread_id=str(thread_id))

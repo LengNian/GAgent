@@ -50,6 +50,7 @@ class AgentManifestTests(unittest.TestCase):
 
         config = get_agents_config()
         self.assertIn("iot_agent", {agent.agent_id for agent in config.agents})
+        self.assertEqual(get_agent_manifest("iot_agent").skills, ["metric_trend_analysis"])
 
     def test_unknown_agent_is_rejected(self) -> None:
         """确认未注册 Agent 不能获得默认权限。"""
@@ -63,3 +64,10 @@ class AgentManifestTests(unittest.TestCase):
         for agent in get_agents_config().agents:
             prompt = get_agent_prompt(agent.agent_id)
             self.assertIn(agent.agent_id.replace("_", " ").split()[0], prompt.lower())
+
+    def test_iot_prompt_includes_metric_trend_skill(self) -> None:
+        """IoT Agent 的系统 Prompt 应包含 manifest 声明的 Skill 内容。"""
+
+        prompt = get_agent_prompt("iot_agent")
+        self.assertIn("## Skill: metric_trend_analysis", prompt)
+        self.assertIn("get_metric_range", prompt)
