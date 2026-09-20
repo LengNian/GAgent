@@ -139,3 +139,50 @@ platforms:
           required: []
         error_messages:
           "5xx": 指标服务暂时不可用，请稍后重试。
+
+      - name: list_alarm_events
+        description: 查询告警事件列表，可按规则、严重级别、状态、目标类型、目标 ID 和首次触发时间范围筛选。当用户查询设备告警、近期告警或需要进行告警根因分析时使用。
+        method: GET
+        endpoint: /api/v1/alarm/alarm-events
+        timeout_seconds: 10
+        retry_attempts: 2
+        risk_level: low
+        argument_locations:
+          RuleId: query
+          Severity: query
+          Status: query
+          TargetType: query
+          TargetId: query
+          FirstTriggeredAtFrom: query
+          FirstTriggeredAtTo: query
+        input_schema:
+          type: object
+          properties:
+            RuleId:
+              type: string
+              description: JSON 字符串形式的规则筛选条件，可选。
+            Severity:
+              type: string
+              description: JSON 字符串形式的严重级别筛选条件，可选。
+            Status:
+              type: string
+              description: JSON 字符串形式的告警状态筛选条件，可选。
+            TargetType:
+              type: string
+              description: JSON 字符串形式的目标类型筛选条件，可选。
+            TargetId:
+              type: string
+              description: JSON 字符串形式的目标 ID 筛选条件，可选。
+            FirstTriggeredAtFrom:
+              type: integer
+              format: int64
+              description: 首次触发时间范围起点，Unix 秒，可选。
+            FirstTriggeredAtTo:
+              type: integer
+              format: int64
+              description: 首次触发时间范围终点，Unix 秒，可选。
+          required: []
+        error_messages:
+          "401": 未认证，请检查 NMS 登录状态。
+          "403": 当前账号没有查询告警事件的权限。
+          "5xx": 告警服务暂时不可用，请稍后重试。

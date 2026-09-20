@@ -23,6 +23,7 @@ agents:
       - get_realtime_metric
       - get_metric_range
       - list_metric_names
+      - list_alarm_events
     skills:
       - metric_trend_analysis
     prompt: prompts/iot_agent.md
