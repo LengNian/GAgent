@@ -1,5 +1,6 @@
 """Agent manifest 和 Action allowlist 测试。"""
 
+import asyncio
 import unittest
 
 from app.agent_manifest import get_agent_manifest, get_agents_config
@@ -32,17 +33,17 @@ class AgentManifestTests(unittest.TestCase):
             "app.tools.registry._create_client",
             lambda url, token: Client(in_memory_gateway),
         ):
-            tools = build_tools_for_agent(get_settings(), "iot_agent")
+            tools = asyncio.run(build_tools_for_agent(get_settings(), "iot_agent"))
 
         self.assertEqual(
             manifest.allowed_actions,
             ["query_device_by_ip", "get_topology_graph", "get_realtime_metric",
-             "get_metric_range", "list_metric_names"],
+             "get_metric_range", "list_metric_names", "list_alarm_events"],
         )
         self.assertEqual(
             [tool.name for tool in tools],
             ["nms.query_device_by_ip", "nms.get_topology_graph", "nms.get_realtime_metric",
-             "nms.get_metric_range", "nms.list_metric_names"],
+             "nms.get_metric_range", "nms.list_metric_names", "nms.list_alarm_events"],
         )
 
     def test_manifest_config_contains_iot_agent(self) -> None:

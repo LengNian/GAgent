@@ -30,7 +30,7 @@ from app.tools.registry import build_tools_for_agent
 logger = logging.getLogger(__name__)
 
 # Report 模型只需要结果摘要所需的数据，不应接收完整的长时间序列。
-_REPORT_DATA_MAX_CHARS = 36000
+_REPORT_DATA_MAX_CHARS = 81920
 
 
 class RouteDecision(BaseModel):
@@ -425,7 +425,7 @@ async def _invoke_domain_graph(
         ) from error
 
 
-def _create_domain_agent(
+async def _create_domain_agent(
     *,
     agent_id: str,
     model: BaseChatModel,
@@ -441,7 +441,7 @@ def _create_domain_agent(
     4. 执行过工具后统一交给 Report Node 汇总；首次没有工具调用时直接结束。
     """
 
-    tools = build_tools_for_agent(settings, agent_id)
+    tools = await build_tools_for_agent(settings, agent_id)
     model_with_tools = model.bind_tools(tools) if tools else model
     tool_policies = {
         tool.name: tool.metadata or {}
@@ -651,7 +651,7 @@ def _create_domain_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
-def _create_orchestrated_agent(
+async def _create_orchestrated_agent(
     *,
     model: BaseChatModel,
     settings: Settings,
@@ -669,7 +669,7 @@ def _create_orchestrated_agent(
     # GLM 的 OpenAI 兼容接口对 response_format 的支持不完整，会将 JSON Schema
     # 当作普通文本返回；函数调用能保证路由结果以工具参数形式返回。
     supervisor_model = model.with_structured_output(RouteDecision, method="function_calling")
-    conversation_graph = _create_domain_agent(
+    conversation_graph = await _create_domain_agent(
         agent_id="conversation_agent",
         model=model,
         settings=settings,
@@ -700,11 +700,32 @@ def _create_orchestrated_agent(
             "decision_summary": decision.decision_summary,
         }
 
-    iot_graph = _create_domain_agent(
-        agent_id="iot_agent",
-        model=model,
-        settings=settings,
-    )
+    async def call_iot_agent(
+        state: AgentGraphState,
+        config: RunnableConfig,
+    ) -> dict[str, list[Any]]:
+        """路由到 IoT 后再发现 MCP 工具并执行领域子图。
+
+        逻辑规划：
+        1. Supervisor 已确认目标为 IoT，才建立需要 MCP tools/list 的领域图。
+        2. 将父图当前状态和运行配置传入子图，保持多轮工具调用和审批上下文。
+        3. 仅回写执行消息；路由决策字段仍由父图持有。
+        """
+
+        iot_graph = await _create_domain_agent(
+            agent_id="iot_agent",
+            model=model,
+            settings=settings,
+            checkpointer=checkpointer,
+        )
+        result = await iot_graph.ainvoke(
+            {
+                "context_messages": state.get("context_messages", []),
+                "execution_messages": state.get("execution_messages", []),
+            },
+            config=config,
+        )
+        return {"execution_messages": result.get("execution_messages", [])}
 
     def route_to_agent(state: AgentGraphState) -> str:
         """根据 Supervisor 结果选择唯一的领域 Agent 节点。"""
@@ -717,7 +738,7 @@ def _create_orchestrated_agent(
     graph = StateGraph(AgentGraphState)
     graph.add_node("supervisor", call_supervisor)
     graph.add_node("conversation_agent", conversation_graph)
-    graph.add_node("iot_agent", iot_graph)
+    graph.add_node("iot_agent", call_iot_agent)
 
 
     graph.add_edge(START, "supervisor")
@@ -734,7 +755,7 @@ def _create_orchestrated_agent(
     return graph.compile(checkpointer=checkpointer)
 
 
-def create_agent(
+async def create_agent(
     *,
     agent_id: str | None = None,
     model: BaseChatModel | None = None,
@@ -755,12 +776,12 @@ def create_agent(
     resolved_settings = settings or get_settings()
     chat_model = model or _build_model(resolved_settings)
     if agent_id:
-        return _create_domain_agent(
+        return await _create_domain_agent(
             agent_id=agent_id,
             model=chat_model,
             settings=resolved_settings,
             checkpointer=checkpointer,
         )
-    return _create_orchestrated_agent(
+    return await _create_orchestrated_agent(
         model=chat_model, settings=resolved_settings, checkpointer=checkpointer
     )

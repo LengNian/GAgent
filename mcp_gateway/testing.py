@@ -33,7 +33,11 @@ def create_in_memory_gateway(
 
         # fastmcp 不支持 **kwargs 签名的工具；此处固定使用与真实工具一致的
         # 单参数签名（首批中台工具均为单参数），多参数工具出现时再泛化。
-        @gateway.tool(name=tool_name, description=tool_spec["description"])
+        @gateway.tool(
+            name=tool_name,
+            description=tool_spec["description"],
+            meta=tool_spec.get("meta"),
+        )
         async def _invoke(ip: str = "") -> str:
             """按声明的响应返回网关契约 JSON。"""
 
@@ -52,12 +56,20 @@ def _default_tools() -> dict[str, dict[str, Any]]:
 
     ok = {"ok": True, "data": {"status": "online"}}
     return {
-        name: {"description": f"{name}（内存桩）", "handler": lambda arguments: ok}
+        name: {
+            "description": f"{name}（内存桩）",
+            "handler": lambda arguments: ok,
+            "meta": {
+                "requires_confirmation": name == "nms.query_device_by_ip",
+                "risk_level": "low",
+            },
+        }
         for name in (
             "nms.query_device_by_ip",
             "nms.get_topology_graph",
             "nms.get_realtime_metric",
             "nms.get_metric_range",
             "nms.list_metric_names",
+            "nms.list_alarm_events",
         )
     }

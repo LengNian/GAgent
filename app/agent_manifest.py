@@ -51,7 +51,7 @@ def get_agents_config() -> AgentsConfig:
     逻辑规划：
     1. 读取 YAML 并校验每个 manifest 的身份、运行限制和 allowlist 类型。
     2. 确认 Agent Prompt 和 Skill 文件都位于受控目录且存在。
-    3. 确认 allowlist 中的工具已在 gateways.yaml 声明，避免能力配置不一致。
+    3. 不读取 Gateway 配置；allowlist 与实际 MCP 工具清单的匹配在运行时发现阶段校验。
     4. 返回缓存配置；后续工具构建只从已校验 manifest 获取工具范围。
     """
 
@@ -70,30 +70,7 @@ def get_agents_config() -> AgentsConfig:
         for skill_name in agent.skills:
             resolve_skill_path(skill_name)
 
-    # 工具来源已切换为 MCP 网关：allowlist 只需对照网关配置中的工具本地名
-    # （网关工具名带平台前缀，如 nms.query_device_by_ip）。发现配置缺失立即
-    # 拒绝启动，避免 Agent 声明无法执行的能力。
-    from mcp_gateway.config_loader import load_gateway_settings
-
-    gateway_settings = load_gateway_settings(_gateway_config_path())
-    gateway_local_names = {
-        api.name for platform in gateway_settings.platforms for api in platform.apis
-    }
-
-    for agent in config.agents:
-        missing = [name for name in agent.allowed_actions if name not in gateway_local_names]
-        if missing:
-            raise ValueError(
-                f"Agent {agent.agent_id} allowlist references tools missing "
-                f"from gateway config: {missing}"
-            )
     return config
-
-
-def _gateway_config_path() -> str:
-    """返回网关配置文件路径（与网关进程默认路径一致）。"""
-
-    return str(AGENTS_CONFIG_PATH.parent / "gateways.yaml")
 
 
 @lru_cache(maxsize=None)

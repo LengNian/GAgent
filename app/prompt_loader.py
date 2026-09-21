@@ -51,7 +51,13 @@ def resolve_skill_path(skill_name: str) -> Path:
 
 
 def load_agent_prompt(manifest: AgentManifest) -> str:
-    """加载共享基础 Prompt、Agent Prompt 和 manifest 声明的 Skills。"""
+    """加载共享基础 Prompt、Agent Prompt 和 manifest 声明的 Skills。
+
+    逻辑规划：
+    1. 读取并校验基础 Prompt 和 Agent Prompt。
+    2. 按 manifest 顺序读取受控 Skill 文档并拼接到最终系统 Prompt。
+    3. 记录实际注入的 Skill 名称，便于区分 Skill 未加载和模型未遵循 Skill。
+    """
 
     base_prompt_path = resolve_prompt_path("prompts/base.md")
     agent_prompt_path = resolve_prompt_path(manifest.prompt)

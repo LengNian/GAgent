@@ -191,7 +191,7 @@ async def _stream_reply(
     try:
         log_event(logger, logging.INFO, "agent_request_started", thread_id=str(thread_id))
         checkpointer = get_checkpointer()
-        agent = create_agent(checkpointer=checkpointer) if checkpointer else create_agent()
+        agent = await create_agent(checkpointer=checkpointer) if checkpointer else await create_agent()
 
 
         print_model_messages(messages)
