@@ -26,6 +26,31 @@ class Settings(BaseSettings):
     mcp_gateway_url: str = Field(validation_alias="MCP_GATEWAY_URL")
     mcp_gateway_token: SecretStr = Field(validation_alias="MCP_GATEWAY_TOKEN")
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
+    stepfun_api_key: SecretStr | None = Field(default=None, validation_alias="STEPFUN_API_KEY")
+    stepfun_base_url: str = Field(
+        default="https://api.stepfun.com/v1", validation_alias="STEPFUN_BASE_URL"
+    )
+    stepfun_asr_model: str = Field(
+        default="stepaudio-2.5-asr", validation_alias="STEPFUN_ASR_MODEL", min_length=1
+    )
+    stepfun_tts_model: str = Field(
+        default="step-tts-mini", validation_alias="STEPFUN_TTS_MODEL", min_length=1
+    )
+    stepfun_tts_voice: str = Field(
+        default="cixingnansheng", validation_alias="STEPFUN_TTS_VOICE", min_length=1
+    )
+    stepfun_tts_language: Literal["粤语", "四川话", "日语"] | None = Field(
+        default=None, validation_alias="STEPFUN_TTS_LANGUAGE"
+    )
+    stepfun_tts_emotion: str | None = Field(
+        default=None, validation_alias="STEPFUN_TTS_EMOTION", min_length=1
+    )
+    stepfun_audio_timeout_seconds: float = Field(
+        default=60, validation_alias="STEPFUN_AUDIO_TIMEOUT_SECONDS", gt=0
+    )
+    stepfun_asr_max_bytes: int = Field(
+        default=10 * 1024 * 1024, validation_alias="STEPFUN_ASR_MAX_BYTES", ge=1
+    )
     context_max_tokens: int = Field(default=12000, validation_alias="CONTEXT_MAX_TOKENS", ge=1)
     context_max_message_tokens: int = Field(
         default=3000, validation_alias="CONTEXT_MAX_MESSAGE_TOKENS", ge=1
@@ -197,6 +222,8 @@ class Settings(BaseSettings):
                 "LONG_TERM_MEMORY_RECALL_TOP_N must not exceed "
                 "LONG_TERM_MEMORY_RECALL_CANDIDATE_LIMIT"
             )
+        if self.stepfun_tts_language and self.stepfun_tts_emotion:
+            raise ValueError("STEPFUN_TTS_LANGUAGE and STEPFUN_TTS_EMOTION cannot both be set")
         return self
 
 

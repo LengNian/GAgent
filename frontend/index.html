@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f4f6">
   <title>NMS Agent</title>
   <link rel="stylesheet" href="./styles.css?v=20260908-1">
-  <script defer src="./app.js?v=20260903-1"></script>
+  <script defer src="./app.js?v=20260921-history-1"></script>
 </head>
 <body>
   <div class="app-shell" id="appShell">
@@ -52,7 +52,7 @@
         <div class="error hidden" id="error" role="alert"><span class="error-icon">!</span><span id="errorText"></span><button class="link-button hidden" id="retry" type="button">重试</button><button class="link-button" id="dismissError" type="button">关闭</button></div>
         <form class="composer" id="chatForm">
           <textarea id="input" rows="1" maxlength="4000" disabled placeholder="创建会话后输入问题"></textarea>
-          <div class="composer-footer"><span id="hint">创建会话后可发送</span><span class="counter" id="counter">0 / 4000</span><button class="button send" id="send" type="submit" disabled>发送 <b aria-hidden="true">→</b></button></div>
+          <div class="composer-footer"><span id="hint">创建会话后可发送</span><span class="counter" id="counter">0 / 4000</span><span class="speech-status hidden" id="speechStatus" role="status"></span><button class="icon-button microphone-button" id="recordAudio" type="button" title="开始录音" aria-label="开始录音" disabled><span aria-hidden="true">&#127908;</span></button><button class="button send" id="send" type="submit" disabled>发送 <b aria-hidden="true">→</b></button></div>
         </form>
       </section>
       </div>

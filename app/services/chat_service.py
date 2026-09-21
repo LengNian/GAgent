@@ -399,6 +399,9 @@ async def _stream_reply(
         if not assistant_text:
             raise ValueError("Agent returned an empty response")
         messages.append(AIMessage(content=assistant_text))
+
+        assistant_persisted: int | None = None
+        
         if user_id is not None:
             assistant_persisted = await to_thread.run_sync(
                 thread_repository.append_message, thread_id, user_id, "assistant", assistant_text
@@ -413,11 +416,16 @@ async def _stream_reply(
             thread_id=str(thread_id),
             response_length=len(assistant_text),
         )
+        
         yield _format_sse_event(
             "done",
             {
                 "trace_id": trace_id,
-                "message": {"role": "assistant", "content": assistant_text},
+                "message": {
+                    "role": "assistant",
+                    "content": assistant_text,
+                    "sequence": assistant_persisted,
+                },
             },
         )
     except GraphInterrupt:

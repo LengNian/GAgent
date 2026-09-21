@@ -44,14 +44,17 @@ async def get_thread_messages(
 
     user_id = _user_id_from_auth_data(_auth_data_from_payload(payload))
     try:
-        stored_messages = await to_thread.run_sync(thread_repository.load_messages, thread_id, user_id)
+        stored_messages = await to_thread.run_sync(
+            thread_repository.load_stored_messages, thread_id, user_id
+        )
     except RuntimeError as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
     if stored_messages is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
     return [
-        MessageResponse(role=role, content=content) for role, content in stored_messages
+        MessageResponse(role=message.role, content=message.content, sequence=message.seq)
+        for message in stored_messages
     ]
 
 

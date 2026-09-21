@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.agent import agent_router
 from app.api.messages import router as messages_router
+from app.api.speech import router as speech_router
 from app.api.threads import router as threads_router
 from app.checkpoint import close_checkpointer, open_checkpointer
 from app.db.connection import close_pool
@@ -43,5 +44,6 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="General-Agent", lifespan=lifespan)
 app.include_router(threads_router)
 app.include_router(messages_router)
+app.include_router(speech_router)
 app.include_router(agent_router)
 app.mount("/", StaticFiles(directory=FRONTEND_DIRECTORY, html=True), name="frontend")

@@ -8,6 +8,7 @@ class MessageResponse(BaseModel):
 
     role: str
     content: str
+    sequence: int
 
 
 class ChatRequest(BaseModel):

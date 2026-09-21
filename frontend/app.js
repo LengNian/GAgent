@@ -20,12 +20,17 @@
     failedContent: "",
     executionSteps: [],
     history: [],
-    sidebarCollapsed: false
+    sidebarCollapsed: false,
+    recording: false,
+    transcribing: false,
+    speechPlayer: null,
+    playingMessage: null,
+    playbackState: "idle"
   };
 
   var elements = {};
 
-  ["appShell", "sidebar", "sidebarResize", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "themeToggle", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote", "deleteConfirm", "deleteConfirmMessage", "cancelDelete", "confirmDelete", "renameDialog", "renameForm", "renameInput", "cancelRename", "confirmRename", "interruptDialog", "interruptMessage", "cancelInterrupt", "confirmInterrupt"].forEach(function (id) { elements[id] = document.getElementById(id); });
+  ["appShell", "sidebar", "sidebarResize", "toggleSidebar", "openSidebar", "threadHistory", "historyEmpty", "newThread", "clearThread", "statusDot", "sessionStatus", "themeToggle", "conversationTitle", "messages", "error", "errorText", "retry", "dismissError", "chatForm", "input", "send", "hint", "counter", "speechStatus", "recordAudio", "railStatus", "threadId", "connectionDot", "connectionStatus", "connectionNote", "deleteConfirm", "deleteConfirmMessage", "cancelDelete", "confirmDelete", "renameDialog", "renameForm", "renameInput", "cancelRename", "confirmRename", "interruptDialog", "interruptMessage", "cancelInterrupt", "confirmInterrupt"].forEach(function (id) { elements[id] = document.getElementById(id); });
   var renameThreadId = null;
   var deleteThreadId = null;
   var interruptThreadId = null;
@@ -50,14 +55,14 @@
       var stored = JSON.parse(localStorage.getItem(HISTORY_STORAGE_KEY) || "[]");
       if (!Array.isArray(stored)) return [];
       return stored.filter(function (item) {
-        return item && typeof item.id === "string" && typeof item.title === "string";
+        return item && typeof item.id === "string";
       }).map(function (item) {
         return {
           id: item.id,
-          title: item.title || null,
+          title: typeof item.title === "string" && item.title.trim() ? item.title : null,
           title_is_custom: item.title_is_custom === true
         };
-      }).slice(0, 20);
+      });
     } catch (error) {
       console.debug("Unable to read the stored thread history.", error);
       return [];
@@ -88,7 +93,7 @@
   function saveHistory() {
     // [逻辑规划] 本地保存仅用于数据库接入前的演示和刷新恢复，写入失败不影响当前对话。
     try {
-      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(threadState.history.slice(0, 20)));
+      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(threadState.history));
     } catch (error) {
       console.debug("Unable to update the stored thread history.", error);
     }
@@ -170,7 +175,6 @@
     } else {
       threadState.history.unshift({ id: threadId, title: title || null, title_is_custom: false });
     }
-    threadState.history = threadState.history.slice(0, 20);
     saveHistory();
     renderHistory();
   }
@@ -300,13 +304,17 @@
     // [逻辑规划] 没有活动会话或正在创建会话时禁止编辑；模型生成期间允许编辑草稿，但禁止发送。
     var active = Boolean(threadState.threadId);
     var canEdit = (active || threadState.pendingNew) && !threadState.creating;
-    var canSend = canEdit && !threadState.busy;
+    var canSend = canEdit && !threadState.busy && !threadState.transcribing;
     elements.input.disabled = !canEdit;
     elements.send.disabled = !canSend || !elements.input.value.trim();
+    elements.recordAudio.disabled = !active || threadState.transcribing;
+    elements.recordAudio.classList.toggle("recording", threadState.recording);
+    elements.recordAudio.title = threadState.recording ? "停止录音" : "开始录音";
+    elements.recordAudio.setAttribute("aria-label", elements.recordAudio.title);
     elements.newThread.disabled = threadState.creating;
     elements.clearThread.classList.toggle("hidden", !active && !threadState.pendingNew);
     elements.threadId.textContent = threadState.threadId || "—";
-    elements.hint.textContent = !active && !threadState.pendingNew ? "创建会话后可发送" : threadState.busy ? "正在生成回复，可编辑下一条问题" : "Enter 换行，发送按钮提交";
+    elements.hint.textContent = !active && !threadState.pendingNew ? "创建会话后可发送" : threadState.transcribing ? "正在识别语音" : threadState.recording ? "录音中，点击麦克风停止" : threadState.busy ? "正在生成回复，可编辑下一条问题" : "Enter 换行，发送按钮提交";
     elements.counter.textContent = elements.input.value.length + " / " + MAX_LENGTH;
   }
 
@@ -431,17 +439,28 @@
       var actions = document.createElement("div");
       actions.className = "message-actions";
       var actionDefinitions = [["⧉", "copy", "复制消息"]];
+      if (message.role === "assistant" && Number.isInteger(message.sequence)) {
+        var isActiveSpeech = threadState.playingMessage === message;
+        actionDefinitions.push([
+          isActiveSpeech && threadState.playbackState === "playing" ? "&#10074;&#10074;" : "&#9654;",
+          "speech",
+          isActiveSpeech && threadState.playbackState === "playing" ? "暂停语音" : isActiveSpeech ? "继续播放" : "播放语音"
+        ]);
+      }
       if (message.role === "assistant") actionDefinitions.push(["👍", "up", "赞"], ["👎", "down", "踩"]);
       actionDefinitions.forEach(function (definition) {
         var action = document.createElement("button");
         action.type = "button";
-        action.textContent = definition[0];
+        if (definition[1] === "speech") action.innerHTML = definition[0];
+        else action.textContent = definition[0];
         action.title = definition[2];
         action.setAttribute("aria-label", definition[2]);
         action.classList.toggle("active", message.feedback === definition[1]);
+        action.classList.toggle("speech-playing", definition[1] === "speech" && threadState.playingMessage === message);
         action.addEventListener("click", function (event) {
           event.stopPropagation();
           if (definition[1] === "copy") copyMessage(message.content);
+          if (definition[1] === "speech") playMessageSpeech(message);
           if (definition[1] === "up" || definition[1] === "down") {
             message.feedback = message.feedback === definition[1] ? null : definition[1];
             render(false);
@@ -457,6 +476,286 @@
   function copyMessage(content) {
     var copied = navigator.clipboard ? navigator.clipboard.writeText(content) : Promise.reject(new Error("clipboard unavailable"));
     copied.then(function () { setConnection("已复制", "消息已复制到剪贴板。", "active"); }).catch(function () { setConnection("复制失败", "请手动选择文本复制。", "error"); });
+  }
+
+  var recordingContext = null;
+  var recordingProcessor = null;
+  var recordingSource = null;
+  var recordingStream = null;
+  var recordedChunks = [];
+
+  function setSpeechStatus(text) {
+    // [逻辑规划] 转写状态只在语音操作期间显示，避免占用常规输入提示空间。
+    elements.speechStatus.textContent = text || "";
+    elements.speechStatus.classList.toggle("hidden", !text);
+  }
+
+  function stopActiveAudio() {
+    // [逻辑规划] 停止当前 PCM 播放器，保证同一时刻只有一条回复播报。
+    var player = threadState.speechPlayer;
+    threadState.speechPlayer = null;
+    threadState.playingMessage = null;
+    threadState.playbackState = "idle";
+    if (player) {
+      player.controller.abort();
+      player.sources.forEach(function (source) { source.stop(); });
+      player.context.close();
+    }
+  }
+
+  function playMessageSpeech(message) {
+    // =========================================================================
+    // [逻辑规划]
+    // 1. 再次点击时暂停或继续当前 PCM 播放队列，不重复请求 TTS。
+    // 2. 请求受线程和消息序号保护的 SSE 音频流，首个分片立即进入播放器。
+    // 3. 用 AudioContext 按时间顺序排队 PCM16 分片，流结束且队列耗尽后清理状态。
+    // =========================================================================
+    if (!threadState.threadId || !Number.isInteger(message.sequence)) return;
+    if (threadState.playingMessage === message && threadState.speechPlayer) {
+      if (threadState.playbackState === "playing") {
+        threadState.speechPlayer.context.suspend();
+        threadState.playbackState = "paused";
+      } else {
+        threadState.speechPlayer.context.resume().then(function () {
+          threadState.playbackState = "playing";
+          render(false);
+        }).catch(function () { showError("无法继续播放语音。", ""); });
+      }
+      render(false);
+      return;
+    }
+    if (threadState.playingMessage === message) {
+      // 音频仍在生成时取消本次播放意图，后到的响应不会自动播放。
+      stopActiveAudio();
+      render(false);
+      return;
+    }
+    stopActiveAudio();
+    threadState.playingMessage = message;
+    threadState.playbackState = "loading";
+    var AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextConstructor) {
+      stopActiveAudio();
+      showError("当前浏览器不支持流式语音播放。", "");
+      return;
+    }
+    var player = {
+      context: new AudioContextConstructor(),
+      controller: new AbortController(),
+      sources: [],
+      nextStartTime: 0,
+      pendingSources: 0,
+      streamComplete: false
+    };
+    threadState.speechPlayer = player;
+    render(false);
+    fetch(apiUrl("/api/threads/" + encodeURIComponent(threadState.threadId) + "/messages/" + message.sequence + "/speech/stream"), {
+      method: "POST",
+      headers: { Accept: "text/event-stream" },
+      signal: player.controller.signal
+    })
+      .then(function (response) {
+        if (!response.ok) return responseError(response).then(function (text) { throw new Error(text); });
+        if (!response.body) throw new Error("当前浏览器不支持流式语音播放。");
+        var reader = response.body.getReader();
+        var decoder = new TextDecoder();
+        var buffer = "";
+        function finishWhenDrained() {
+          if (player.streamComplete && player.pendingSources === 0 && threadState.speechPlayer === player) {
+            stopActiveAudio();
+            render(false);
+          }
+        }
+        function queuePcm(base64Audio) {
+          var binary = atob(base64Audio);
+          var samples = new Int16Array(binary.length / 2);
+          for (var index = 0; index < samples.length; index += 1) {
+            var low = binary.charCodeAt(index * 2);
+            var high = binary.charCodeAt(index * 2 + 1);
+            samples[index] = (high << 8) | low;
+          }
+          var audioBuffer = player.context.createBuffer(1, samples.length, 24000);
+          var channel = audioBuffer.getChannelData(0);
+          for (var sampleIndex = 0; sampleIndex < samples.length; sampleIndex += 1) channel[sampleIndex] = samples[sampleIndex] / 32768;
+          var source = player.context.createBufferSource();
+          source.buffer = audioBuffer;
+          source.connect(player.context.destination);
+          player.nextStartTime = Math.max(player.context.currentTime + 0.03, player.nextStartTime);
+          source.start(player.nextStartTime);
+          player.nextStartTime += audioBuffer.duration;
+          player.pendingSources += 1;
+          player.sources.push(source);
+          source.onended = function () {
+            player.pendingSources -= 1;
+            finishWhenDrained();
+          };
+          if (threadState.speechPlayer === player && threadState.playbackState === "loading") {
+            threadState.playbackState = "playing";
+            render(false);
+          }
+        }
+        function handleBlock(block) {
+          var eventName = "message";
+          var data = "";
+          block.split(/\r?\n/).forEach(function (line) {
+            if (line.indexOf("event:") === 0) eventName = line.slice(6).trim();
+            if (line.indexOf("data:") === 0) data += line.slice(5).trim();
+          });
+          if (eventName === "audio" && data) queuePcm(data);
+          if (eventName === "done") {
+            player.streamComplete = true;
+            finishWhenDrained();
+          }
+          if (eventName === "error") {
+            try { throw new Error(JSON.parse(data).message || "语音播报失败。"); }
+            catch (error) { throw error instanceof Error ? error : new Error("语音播报失败。"); }
+          }
+        }
+        function readNext() {
+          return reader.read().then(function (chunk) {
+            if (chunk.done) {
+              buffer += decoder.decode();
+              if (buffer.trim()) handleBlock(buffer);
+              player.streamComplete = true;
+              finishWhenDrained();
+              return;
+            }
+            buffer += decoder.decode(chunk.value, { stream: true });
+            var blocks = buffer.split(/\r?\n\r?\n/);
+            buffer = blocks.pop();
+            blocks.forEach(handleBlock);
+            return readNext();
+          });
+        }
+        return readNext();
+      })
+      .catch(function (error) {
+        if (error.name === "AbortError") return;
+        if (threadState.playingMessage === message) {
+          stopActiveAudio();
+          render(false);
+          showError(error.message || "语音播报失败。", "");
+        }
+      });
+  }
+
+  function encodeWav(chunks, sampleRate) {
+    // =========================================================================
+    // [逻辑规划]
+    // 1. 拼接 Web Audio API 收集的单声道 Float32 采样数据。
+    // 2. 将采样裁剪并编码为 16 位 PCM，写入标准 WAV 文件头。
+    // 3. 返回 Blob，供 StepFun 支持的 multipart WAV 上传直接使用。
+    // =========================================================================
+    var length = chunks.reduce(function (total, chunk) { return total + chunk.length; }, 0);
+    var buffer = new ArrayBuffer(44 + length * 2);
+    var view = new DataView(buffer);
+    var writeText = function (offset, value) {
+      for (var index = 0; index < value.length; index += 1) view.setUint8(offset + index, value.charCodeAt(index));
+    };
+    writeText(0, "RIFF");
+    view.setUint32(4, 36 + length * 2, true);
+    writeText(8, "WAVEfmt ");
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, 1, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeText(36, "data");
+    view.setUint32(40, length * 2, true);
+    var offset = 44;
+    chunks.forEach(function (chunk) {
+      for (var index = 0; index < chunk.length; index += 1, offset += 2) {
+        var sample = Math.max(-1, Math.min(1, chunk[index]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+      }
+    });
+    return new Blob([buffer], { type: "audio/wav" });
+  }
+
+  function closeRecording() {
+    // [逻辑规划] 断开音频处理节点、关闭麦克风轨道和 AudioContext，避免录音停止后继续占用设备。
+    if (recordingProcessor) recordingProcessor.disconnect();
+    if (recordingSource) recordingSource.disconnect();
+    if (recordingStream) recordingStream.getTracks().forEach(function (track) { track.stop(); });
+    if (recordingContext) recordingContext.close();
+    recordingProcessor = null;
+    recordingSource = null;
+    recordingStream = null;
+    recordingContext = null;
+  }
+
+  function transcribeRecording() {
+    // [逻辑规划] 停止采集后一次性上传 WAV；成功结果只回填输入框，绝不自动调用聊天接口。
+    var audio = encodeWav(recordedChunks, recordingContext.sampleRate);
+    closeRecording();
+    threadState.recording = false;
+    threadState.transcribing = true;
+    setSpeechStatus("正在识别语音");
+    updateUi();
+    var form = new FormData();
+    form.append("file", audio, "recording.wav");
+    fetch(apiUrl("/api/threads/" + encodeURIComponent(threadState.threadId) + "/transcription"), {
+      method: "POST",
+      body: form
+    })
+      .then(function (response) {
+        if (!response.ok) return responseError(response).then(function (text) { throw new Error(text); });
+        return response.json();
+      })
+      .then(function (result) {
+        if (!result || typeof result.text !== "string" || !result.text.trim()) throw new Error("未识别到有效语音。");
+        elements.input.value = result.text.trim();
+        resizeInput();
+        elements.input.focus();
+      })
+      .catch(function (error) { showError(error.message || "语音识别失败。", ""); })
+      .finally(function () {
+        threadState.transcribing = false;
+        setSpeechStatus("");
+        updateUi();
+      });
+  }
+
+  function toggleRecording() {
+    // =========================================================================
+    // [逻辑规划]
+    // 1. 录音中时直接停止并转写；空闲时请求麦克风权限。
+    // 2. 使用 Web Audio 原始采样而非 MediaRecorder WebM，确保 ASR 收到支持的 WAV。
+    // 3. 权限、设备和初始化异常均释放已申请资源并显示可读错误。
+    // =========================================================================
+    if (threadState.recording) {
+      transcribeRecording();
+      return;
+    }
+    if (!threadState.threadId || !navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      showError("当前浏览器不支持麦克风录音。", "");
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true } })
+      .then(function (stream) {
+        var AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextConstructor) throw new Error("当前浏览器不支持音频采集。");
+        recordingStream = stream;
+        recordingContext = new AudioContextConstructor();
+        recordingSource = recordingContext.createMediaStreamSource(stream);
+        recordingProcessor = recordingContext.createScriptProcessor(4096, 1, 1);
+        recordedChunks = [];
+        recordingProcessor.onaudioprocess = function (event) {
+          recordedChunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+        };
+        recordingSource.connect(recordingProcessor);
+        recordingProcessor.connect(recordingContext.destination);
+        threadState.recording = true;
+        clearError();
+        setSpeechStatus("录音中");
+        updateUi();
+      })
+      .catch(function (error) {
+        closeRecording();
+        showError(error.name === "NotAllowedError" ? "请允许浏览器使用麦克风。" : "无法开始录音。", "");
+      });
   }
 
 
@@ -562,7 +861,7 @@
   }
 
 
-  function setAssistant(content, streaming, failed) {
+  function setAssistant(content, streaming, failed, sequence) {
     // [逻辑规划] 复用最后一条助手消息接收增量文本；没有助手消息时创建一条，保证消息顺序不变。
     var message = threadState.messages[threadState.messages.length - 1];
     if (!message || message.role !== "assistant") {
@@ -572,6 +871,7 @@
     message.content = content;
     message.streaming = Boolean(streaming);
     message.error = Boolean(failed);
+    if (Number.isInteger(sequence)) message.sequence = sequence;
     render(true);
   }
 
@@ -644,7 +944,10 @@
           if (event && (event.name === "done" || event.name === "error" || event.name === "interrupt")) sawTerminalEvent = true;
           if (event && event.name === "interrupt") sawInterrupt = true;
           content = applyEvent(event, content);
-          if (event && (event.name === "delta" || event.name === "done")) setAssistant(content, event.name === "delta", false);
+          if (event && (event.name === "delta" || event.name === "done")) {
+            var sequence = event.name === "done" && event.data.message ? event.data.message.sequence : undefined;
+            setAssistant(content, event.name === "delta", false, sequence);
+          }
         });
         return next();
       });
@@ -773,6 +1076,11 @@
     threadState.messages = [];
     threadState.busy = false;
     threadState.awaitingInterrupt = false;
+    if (threadState.recording) closeRecording();
+    threadState.recording = false;
+    threadState.transcribing = false;
+    setSpeechStatus("");
+    stopActiveAudio();
     clearError();
     clearExecution();
     updateHeader();
@@ -782,6 +1090,7 @@
 
   // [事件绑定] 将页面操作映射到侧栏、会话创建、清除、重试、输入和发送逻辑。
   elements.newThread.addEventListener("click", createThread);
+  elements.recordAudio.addEventListener("click", toggleRecording);
   elements.toggleSidebar.addEventListener("click", function () {
     if (window.matchMedia("(max-width: 820px)").matches) {
       setSidebarOpen(false);
@@ -885,6 +1194,10 @@
       renameThreadId = null;
       deleteThreadId = null;
     }
+  });
+  window.addEventListener("beforeunload", function () {
+    closeRecording();
+    stopActiveAudio();
   });
 
   var savedSidebarState = null;

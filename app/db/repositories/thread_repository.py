@@ -56,6 +56,29 @@ def load_messages(thread_id: UUID, user_id: str) -> list[tuple[str, str]] | None
     return [(message.role, message.content) for message in stored_messages]
 
 
+def load_message(thread_id: UUID, user_id: str, sequence: int) -> StoredMessage | None:
+    """读取用户拥有的单条业务消息。"""
+
+    # =========================================================================
+    # [逻辑规划]
+    # 1. 以 thread_id、user_id 与序号联合查询，避免跨用户读取待播报文本。
+    # 2. 未命中时返回 None，由 API 统一转换为 404。
+    # =========================================================================
+    with _connection() as connection:
+        row = connection.execute(
+            """
+            SELECT m.seq, m.role, m.content
+            FROM aiagent.aiagent_messages AS m
+            JOIN aiagent.aiagent_threads AS t ON t.thread_id = m.thread_id
+            WHERE m.thread_id = %s AND t.user_id = %s AND m.seq = %s
+            """,
+            (thread_id, user_id, sequence),
+        ).fetchone()
+    if row is None:
+        return None
+    return StoredMessage(int(row[0]), str(row[1]), str(row[2]))
+
+
 def load_recent_stored_messages(thread_id: UUID, user_id: str, limit: int) -> list[StoredMessage] | None:
     """读取当前会话最近的业务消息，并恢复 seq 正序。"""
     if limit < 1:
@@ -156,6 +179,7 @@ __all__ = [
     "create_thread",
     "thread_exists_for_user",
     "load_messages",
+    "load_message",
     "load_stored_messages",
     "load_recent_stored_messages",
     "append_message",
