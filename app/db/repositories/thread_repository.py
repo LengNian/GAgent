@@ -31,7 +31,7 @@ def load_stored_messages(thread_id: UUID, user_id: str) -> list[StoredMessage] |
     with _connection() as connection:
         rows = connection.execute(
             """
-            SELECT m.seq, m.role, m.content
+            SELECT m.seq, m.role, m.content, m.emotion
             FROM aiagent.aiagent_messages AS m
             JOIN aiagent.aiagent_threads AS t ON t.thread_id = m.thread_id
             WHERE m.thread_id = %s AND t.user_id = %s
@@ -45,7 +45,7 @@ def load_stored_messages(thread_id: UUID, user_id: str) -> list[StoredMessage] |
         ).fetchone()
     if thread is None:
         return None
-    return [StoredMessage(int(seq), str(role), str(content)) for seq, role, content in rows]
+    return [StoredMessage(int(seq), str(role), str(content), emotion) for seq, role, content, emotion in rows]
 
 
 def load_messages(thread_id: UUID, user_id: str) -> list[tuple[str, str]] | None:
@@ -67,7 +67,7 @@ def load_message(thread_id: UUID, user_id: str, sequence: int) -> StoredMessage 
     with _connection() as connection:
         row = connection.execute(
             """
-            SELECT m.seq, m.role, m.content
+            SELECT m.seq, m.role, m.content, m.emotion
             FROM aiagent.aiagent_messages AS m
             JOIN aiagent.aiagent_threads AS t ON t.thread_id = m.thread_id
             WHERE m.thread_id = %s AND t.user_id = %s AND m.seq = %s
@@ -76,7 +76,7 @@ def load_message(thread_id: UUID, user_id: str, sequence: int) -> StoredMessage 
         ).fetchone()
     if row is None:
         return None
-    return StoredMessage(int(row[0]), str(row[1]), str(row[2]))
+    return StoredMessage(int(row[0]), str(row[1]), str(row[2]), row[3])
 
 
 def load_recent_stored_messages(thread_id: UUID, user_id: str, limit: int) -> list[StoredMessage] | None:
@@ -86,9 +86,9 @@ def load_recent_stored_messages(thread_id: UUID, user_id: str, limit: int) -> li
     with _connection() as connection:
         rows = connection.execute(
             """
-            SELECT seq, role, content
+            SELECT seq, role, content, emotion
             FROM (
-                SELECT m.seq, m.role, m.content
+                SELECT m.seq, m.role, m.content, m.emotion
                 FROM aiagent.aiagent_messages AS m
                 JOIN aiagent.aiagent_threads AS t ON t.thread_id = m.thread_id
                 WHERE m.thread_id = %s AND t.user_id = %s
@@ -105,10 +105,10 @@ def load_recent_stored_messages(thread_id: UUID, user_id: str, limit: int) -> li
         ).fetchone()
     if thread is None:
         return None
-    return [StoredMessage(int(seq), str(role), str(content)) for seq, role, content in rows]
+    return [StoredMessage(int(seq), str(role), str(content), emotion) for seq, role, content, emotion in rows]
 
 
-def append_message(thread_id: UUID, user_id: str, role: str, content: str) -> int | None:
+def append_message(thread_id: UUID, user_id: str, role: str, content: str, emotion: str | None = None) -> int | None:
     """按会话序号追加消息。"""
     with _connection() as connection:
         row = connection.execute(
@@ -124,10 +124,10 @@ def append_message(thread_id: UUID, user_id: str, role: str, content: str) -> in
             return None
         connection.execute(
             """
-            INSERT INTO aiagent.aiagent_messages (thread_id, seq, role, content)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO aiagent.aiagent_messages (thread_id, seq, role, content, emotion)
+            VALUES (%s, %s, %s, %s, %s)
             """,
-            (thread_id, row[0], role, content),
+            (thread_id, row[0], role, content, emotion if role == "assistant" else None),
         )
     return int(row[0])
 

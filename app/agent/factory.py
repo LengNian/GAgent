@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 # Report 模型只需要结果摘要所需的数据，不应接收完整的长时间序列。
 _REPORT_DATA_MAX_CHARS = 81920
+ALLOWED_EMOTIONS = frozenset({"撒娇", "非常高兴", "非常生气", "悲伤", "困惑", "钦佩"})
 
 
 class RouteDecision(BaseModel):
@@ -214,6 +215,41 @@ def _failure_report_message(result: ActionResult) -> str:
     return "当前操作未能完成，系统已阻止不可信结果返回。"
 
 
+def _fallback_report_emotion(result: ActionResult) -> str:
+    """根据已校验的工具结果选择保守的 IoT 播报情绪。"""
+
+    if result.ok:
+        return "非常高兴"
+    if result.error_type in {"transport", "response"}:
+        return "悲伤"
+    if result.error_code in {"invalid_ipv4", "missing_required_argument"}:
+        return "困惑"
+    return "非常生气"
+
+
+def _parse_report_response(content: object, fallback_emotion: str) -> tuple[str, str]:
+    """解析 Report 的可选结构化输出，拒绝未授权情绪和值类型。"""
+
+    if isinstance(content, str):
+        text = content.strip()
+        if text.startswith("```") and text.endswith("```"):
+            text = text[3:-3].strip()
+            if text.lower().startswith("json"):
+                text = text[4:].strip()
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return (text, fallback_emotion) if text else ("", fallback_emotion)
+        if isinstance(parsed, dict):
+            reply = parsed.get("reply")
+            emotion = parsed.get("emotion")
+            if isinstance(reply, str) and reply.strip():
+                validated = emotion if isinstance(emotion, str) and emotion in ALLOWED_EMOTIONS else fallback_emotion
+                return reply.strip(), validated
+        return text, fallback_emotion
+    return "", fallback_emotion
+
+
 def _compact_report_value(value: Any, remaining_chars: int) -> tuple[Any, bool]:
     """在交给 Report 模型前限制工具结果体积。
 
@@ -309,79 +345,69 @@ async def _summarize_successful_action_result(
         logger.exception("Report model invocation failed for action %s", result.action_name)
         return fallback
 
-    summary = getattr(response, "content", "")
-    if isinstance(summary, str) and summary.strip():
-        return summary.strip()
+    summary, _ = _parse_report_response(getattr(response, "content", ""), _fallback_report_emotion(result))
+    if summary:
+        return summary
     return fallback
 
 
-async def _summarize_action_results(
-    results: list[ActionResult],
-    model: BaseChatModel,
-) -> str:
-    """使用 Report 模型汇总一轮中的全部工具结果。
+async def _summarize_successful_action_result_with_emotion(
+    result: ActionResult, model: BaseChatModel
+) -> tuple[str, str]:
+    """生成 IoT 报告文本及经过白名单校验的情绪。"""
 
-    逻辑规划：
-    1. 单个结果复用既有摘要路径，保证已有单工具行为不变。
-    2. 多个结果按执行顺序组织为 JSON 数组，供 Report 模型关联分析。
-    3. Report 模型异常时优先返回首个失败的确定性提示，避免宣称全部成功。
-    """
+    fallback = _failure_report_message(result) if not result.ok else "设备查询已完成，但结果摘要生成失败，请稍后重试。"
+    try:
+        response = await model.ainvoke([
+            SystemMessage(content=get_report_prompt()),
+            HumanMessage(content=json.dumps(_report_payload(result), ensure_ascii=False)),
+        ])
+    except Exception:
+        logger.exception("Report model invocation failed for action %s", result.action_name)
+        return fallback, _fallback_report_emotion(result)
+    text, emotion = _parse_report_response(getattr(response, "content", ""), _fallback_report_emotion(result))
+    return (text or fallback), emotion
 
-    if len(results) == 1:
-        return await _summarize_successful_action_result(results[0], model)
 
-    report_input = json.dumps(
-        {
-            "results": [
-                _report_payload(result, max(2000, _REPORT_DATA_MAX_CHARS // len(results)))
-                for result in results
-            ]
-        },
-        ensure_ascii=False,
-    )
+async def _summarize_action_results_with_emotion(
+    results: list[ActionResult], model: BaseChatModel
+) -> tuple[str, str]:
+    """汇总多个工具结果并提取结构化情绪。"""
+
     fallback_result = next((result for result in results if not result.ok), None)
     fallback = (
         _failure_report_message(fallback_result)
         if fallback_result is not None
         else "设备查询已完成，但结果摘要生成失败，请稍后重试。"
     )
+    fallback_emotion = _fallback_report_emotion(fallback_result) if fallback_result else "非常高兴"
+    if len(results) == 1:
+        return await _summarize_successful_action_result_with_emotion(results[0], model)
     try:
-        response = await model.ainvoke(
-            [
-                SystemMessage(content=get_report_prompt()),
-                HumanMessage(content=report_input),
-            ]
-        )
+        response = await model.ainvoke([
+            SystemMessage(content=get_report_prompt()),
+            HumanMessage(content=json.dumps({"results": [_report_payload(result, max(2000, _REPORT_DATA_MAX_CHARS // len(results))) for result in results]}, ensure_ascii=False)),
+        ])
     except Exception:
         logger.exception("Report model invocation failed for multiple actions")
-        return fallback
+        return fallback, fallback_emotion
+    text, emotion = _parse_report_response(getattr(response, "content", ""), fallback_emotion)
+    return (text or fallback), emotion
 
-    summary = getattr(response, "content", "")
-    return summary.strip() if isinstance(summary, str) and summary.strip() else fallback
 
-
-async def _report_message_for_messages(
-    messages: list[Any],
-    model: BaseChatModel,
-) -> str:
-    """读取全部 ToolMessage 结果并生成最终报告。
-
-    逻辑规划：
-    1. 按执行顺序收集每次 ToolNode 追加的 ToolMessage。
-    2. 任一工具结果无法校验时停止汇总，避免部分数据被误报为完整结论。
-    3. 将全部成功和失败结果交给 Report 模型总结，模型不可用时使用安全兜底。
-    """
+async def _report_result_for_messages(messages: list[Any], model: BaseChatModel) -> tuple[str, str]:
+    """读取工具结果并返回最终文本和情绪。"""
 
     results: list[ActionResult] = []
     for message in messages:
         if isinstance(message, ToolMessage):
             result = _action_result_from_tool_content(message.content)
             if result is None:
-                return "工具返回结果异常，无法确认本次设备查询是否完成。"
+                return "工具返回结果异常，无法确认本次设备查询是否完成。", "困惑"
             results.append(result)
     if not results:
-        return "未收到工具执行结果，无法确认本次设备查询是否完成。"
-    return await _summarize_action_results(results, model)
+        return "未收到工具执行结果，无法确认本次设备查询是否完成。", "困惑"
+    return await _summarize_action_results_with_emotion(results, model)
 
 
 async def _invoke_domain_graph(
@@ -540,8 +566,8 @@ async def _create_domain_agent(
         """
         if state.get("approval_rejected"):
             await _finish_task(config, "rejected")
-            return {"execution_messages": [AIMessage(content="操作已取消，未执行相关工具。")]}
-        report_message = await _report_message_for_messages(
+            return {"execution_messages": [AIMessage(content="操作已取消，未执行相关工具。", additional_kwargs={"emotion": "悲伤"})]}
+        report_message, emotion = await _report_result_for_messages(
             state.get("execution_messages", []),
             model,
         )
@@ -552,7 +578,7 @@ async def _create_domain_agent(
         ]
         completed = action_results and all(result is not None and result.ok for result in action_results)
         await _finish_task(config, "completed" if completed else "failed")
-        return {"execution_messages": [AIMessage(content=report_message)]}
+        return {"execution_messages": [AIMessage(content=report_message, additional_kwargs={"emotion": emotion})]}
 
     async def approval_gate(state: DomainGraphState, config: RunnableConfig) -> dict[str, object]:
         """在需要确认的 Action 执行前暂停领域子图。"""

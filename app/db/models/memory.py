@@ -12,6 +12,7 @@ class StoredMessage:
     seq: int
     role: str
     content: str
+    emotion: str | None = None
 
 
 @dataclass(frozen=True)

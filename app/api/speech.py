@@ -66,7 +66,7 @@ async def stream_message_speech(thread_id: UUID, sequence: int) -> StreamingResp
 
     async def events():
         try:
-            async for audio in stream_speech(message.content, get_settings()):
+            async for audio in stream_speech(message.content, get_settings(), emotion=message.emotion):
                 yield f"event: audio\ndata: {audio}\n\n"
             yield "event: done\ndata: {}\n\n"
         except (SpeechServiceError, ValueError) as error:

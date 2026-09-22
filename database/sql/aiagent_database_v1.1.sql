@@ -96,12 +96,14 @@ CREATE TABLE aiagent.aiagent_messages (
     seq        BIGINT      NOT NULL,
     role       TEXT        NOT NULL,                        -- user | assistant
     content    TEXT        NOT NULL,
+    emotion    TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT pk_aiagent_messages PRIMARY KEY (thread_id, seq  ),
     CONSTRAINT fk_aiagent_messages_thread FOREIGN KEY (thread_id) REFERENCES aiagent.aiagent_threads (thread_id) ON DELETE CASCADE,
     CONSTRAINT chk_aiagent_messages_seq CHECK (seq > 0),
     CONSTRAINT chk_aiagent_messages_role CHECK (role IN ('user', 'assistant')),
-    CONSTRAINT chk_aiagent_messages_content CHECK (btrim(content) <> '')
+    CONSTRAINT chk_aiagent_messages_content CHECK (btrim(content) <> ''),
+    CONSTRAINT chk_aiagent_messages_emotion CHECK (emotion IS NULL OR emotion IN ('撒娇', '非常高兴', '非常生气', '悲伤', '困惑', '钦佩'))
 );
 
 COMMENT ON TABLE aiagent.aiagent_messages IS '消息表：保存页面需要展示的用户和助手文本，复合主键 (thread_id, seq)，会话删除时消息级联删除';

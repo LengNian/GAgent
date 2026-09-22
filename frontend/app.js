@@ -861,7 +861,7 @@
   }
 
 
-  function setAssistant(content, streaming, failed, sequence) {
+  function setAssistant(content, streaming, failed, sequence, emotion) {
     // [逻辑规划] 复用最后一条助手消息接收增量文本；没有助手消息时创建一条，保证消息顺序不变。
     var message = threadState.messages[threadState.messages.length - 1];
     if (!message || message.role !== "assistant") {
@@ -872,6 +872,7 @@
     message.streaming = Boolean(streaming);
     message.error = Boolean(failed);
     if (Number.isInteger(sequence)) message.sequence = sequence;
+    if (typeof emotion === "string") message.emotion = emotion;
     render(true);
   }
 
@@ -946,7 +947,7 @@
           content = applyEvent(event, content);
           if (event && (event.name === "delta" || event.name === "done")) {
             var sequence = event.name === "done" && event.data.message ? event.data.message.sequence : undefined;
-            setAssistant(content, event.name === "delta", false, sequence);
+            setAssistant(content, event.name === "delta", false, sequence, event.name === "done" && event.data.message ? event.data.message.emotion : undefined);
           }
         });
         return next();

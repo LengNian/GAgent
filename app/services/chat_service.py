@@ -23,6 +23,8 @@ from app.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+_ALLOWED_EMOTIONS = frozenset({"撒娇", "非常高兴", "非常生气", "悲伤", "困惑", "钦佩"})
+
 _active_threads: set[UUID] = set()
 _active_threads_lock = asyncio.Lock()
 
@@ -82,6 +84,21 @@ def _report_output_text(output: object) -> str:
     if not isinstance(messages, list) or not messages:
         return ""
     return _chunk_text(messages[-1])
+
+
+def _report_output_emotion(output: object) -> str | None:
+    """读取 Report 消息中的白名单情绪，非法值视为缺失。"""
+
+    if not isinstance(output, dict):
+        return None
+    messages = output.get("execution_messages")
+    if not isinstance(messages, list) or not messages:
+        return None
+    metadata = getattr(messages[-1], "additional_kwargs", {})
+    if not isinstance(metadata, dict):
+        return None
+    value = metadata.get("emotion")
+    return value if value in _ALLOWED_EMOTIONS else None
 
 
 def _safe_tool_arguments(arguments: object) -> dict[str, object]:
@@ -184,6 +201,8 @@ async def _stream_reply(
     """
     trace_token = set_trace_id(trace_id)
     assistant_text = ""
+    assistant_emotion: str = "非常高兴"
+    target_agent: str | None = None
     started_tool_runs: set[str] = set()
     completed_tool_runs: set[str] = set()
     streamed_model_runs: set[str] = set()
@@ -272,7 +291,9 @@ async def _stream_reply(
                 if not isinstance(output, dict):
                     continue
                 decision_summary = output.get("decision_summary")
-                target_agent = output.get("target_agent")
+                routed_agent = output.get("target_agent")
+                if routed_agent in {"conversation_agent", "iot_agent"}:
+                    target_agent = routed_agent
 
                 if isinstance(decision_summary, str) and decision_summary:
                     log_event(
@@ -286,13 +307,13 @@ async def _stream_reply(
                         "agent_progress",
                         {"message": f"Supervisor：{decision_summary}"},
                     )
-                if target_agent in {"conversation_agent", "iot_agent"}:
+                if routed_agent in {"conversation_agent", "iot_agent"}:
                     yield _format_sse_event(
                         "agent_progress",
                         {
                             "message": (
                                 "Supervisor：我将使用 "
-                                f"{_agent_display_name(target_agent)} 处理。"
+                                f"{_agent_display_name(routed_agent)} 处理。"
                             )
                         },
                     )
@@ -321,6 +342,9 @@ async def _stream_reply(
 
             if event_name == "on_chain_end" and node_name == "report":
                 text = _report_output_text(event_data.get("output"))
+                report_emotion = _report_output_emotion(event_data.get("output"))
+                if report_emotion:
+                    assistant_emotion = report_emotion
                 if text:
                     assistant_text += text
                     yield _format_sse_event("delta", {"text": text})
@@ -398,13 +422,15 @@ async def _stream_reply(
             return
         if not assistant_text:
             raise ValueError("Agent returned an empty response")
+        if target_agent == "conversation_agent":
+            assistant_emotion = "撒娇"
         messages.append(AIMessage(content=assistant_text))
 
         assistant_persisted: int | None = None
         
         if user_id is not None:
             assistant_persisted = await to_thread.run_sync(
-                thread_repository.append_message, thread_id, user_id, "assistant", assistant_text
+                thread_repository.append_message, thread_id, user_id, "assistant", assistant_text, assistant_emotion
             )
             if assistant_persisted:
                 _schedule_long_term_memory_extraction(thread_id, user_id, assistant_persisted)
@@ -425,6 +451,7 @@ async def _stream_reply(
                     "role": "assistant",
                     "content": assistant_text,
                     "sequence": assistant_persisted,
+                    "emotion": assistant_emotion,
                 },
             },
         )

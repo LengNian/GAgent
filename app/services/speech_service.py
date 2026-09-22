@@ -10,6 +10,8 @@ import httpx
 
 from app.settings import Settings
 
+_ALLOWED_TTS_EMOTIONS = frozenset({"撒娇", "非常高兴", "非常生气", "悲伤", "困惑", "钦佩"})
+
 
 class SpeechServiceError(Exception):
     """语音上游服务不可用或返回无效响应。"""
@@ -108,7 +110,7 @@ def split_speech_text(text: str, limit: int = 1000) -> list[str]:
     return [segment for segment in segments if segment.strip()]
 
 
-async def stream_speech(text: str, settings: Settings):
+async def stream_speech(text: str, settings: Settings, emotion: str | None = None):
     """以 StepFun SSE 方式转发 PCM 音频分片，首片到达即可播放。"""
 
     clean_text = strip_markdown(text)
@@ -129,8 +131,11 @@ async def stream_speech(text: str, settings: Settings):
             }
             if settings.stepfun_tts_language:
                 payload["voice_label"] = {"language": settings.stepfun_tts_language}
-            elif settings.stepfun_tts_emotion:
-                payload["voice_label"] = {"emotion": settings.stepfun_tts_emotion}
+            elif (emotion if emotion in _ALLOWED_TTS_EMOTIONS else None) or settings.stepfun_tts_emotion:
+                configured_emotion = settings.stepfun_tts_emotion
+                selected_emotion = emotion if emotion in _ALLOWED_TTS_EMOTIONS else configured_emotion
+                if selected_emotion in _ALLOWED_TTS_EMOTIONS:
+                    payload["voice_label"] = {"emotion": selected_emotion}
             try:
                 async with client.stream(
                     "POST",

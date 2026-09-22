@@ -9,6 +9,7 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     sequence: int
+    emotion: str | None = None
 
 
 class ChatRequest(BaseModel):

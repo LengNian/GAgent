@@ -53,7 +53,7 @@ async def get_thread_messages(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
 
     return [
-        MessageResponse(role=message.role, content=message.content, sequence=message.seq)
+        MessageResponse(role=message.role, content=message.content, sequence=message.seq, emotion=message.emotion)
         for message in stored_messages
     ]
 
