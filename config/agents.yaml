@@ -12,8 +12,8 @@ agents:
     allowed_actions: []
     prompt: prompts/conversation_agent.md
     runtime:
-      max_steps: 3
-      timeout_seconds: 60
+      max_steps: 20
+      timeout_seconds: 120
 
   - agent_id: iot_agent
     description: 负责物联网设备查询、指标监控和拓扑查看。
@@ -26,7 +26,9 @@ agents:
       - list_alarm_events
     skills:
       - metric_trend_analysis
+      - alarm_root_cause
+      - device_health_snapshot
     prompt: prompts/iot_agent.md
     runtime:
-      max_steps: 10
-      timeout_seconds: 60
+      max_steps: 50
+      timeout_seconds: 120

@@ -13,8 +13,8 @@ AGENTS_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config" / "agents
 class AgentRuntimeConfig(BaseModel):
     """Agent 的运行时限制。"""
 
-    max_steps: int = Field(default=5, ge=1, le=20)
-    timeout_seconds: float = Field(default=60, gt=0, le=300)
+    max_steps: int = Field(default=5, ge=1, le=200)
+    timeout_seconds: float = Field(default=60, gt=0, le=1200)
 
 
 class AgentManifest(BaseModel):

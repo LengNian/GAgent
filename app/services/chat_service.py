@@ -15,7 +15,7 @@ from app.db.repositories import long_term_memory_repository, thread_repository
 from app.agent import create_agent
 from app.checkpoint import get_checkpointer
 from app.debug import print_model_messages
-from app.agent.factory import AgentExecutionLimitError, SupervisorRoutingError
+from app.agent.models import AgentExecutionLimitError, SupervisorRoutingError
 from app.agent_manifest import get_agents_config
 from app.memory import extract_and_persist_long_term_memories
 from app.observability import log_event, reset_trace_id, set_trace_id
