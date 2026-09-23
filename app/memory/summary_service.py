@@ -100,6 +100,11 @@ def _build_summary_model(settings: Settings) -> ChatOpenAI:
     }
     if settings.llm_base_url:
         model_kwargs["base_url"] = settings.llm_base_url
+    # 思考模式会静默忽略上面的 temperature=0，使“摘要要稳定”的约定失效，
+    # 因此摘要模型同样需要跟随关闭开关。
+    extra_body = settings.llm_extra_body()
+    if extra_body:
+        model_kwargs["extra_body"] = extra_body
     return ChatOpenAI(**model_kwargs)
 
 

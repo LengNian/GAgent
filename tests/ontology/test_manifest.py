@@ -40,10 +40,11 @@ class AgentManifestTests(unittest.TestCase):
             ["query_device_by_ip", "get_topology_graph", "get_realtime_metric",
              "get_metric_range", "list_metric_names", "list_alarm_events"],
         )
+        # 模型可见工具名必须与 allowlist 完全一致（不带 MCP 平台前缀），
+        # 否则严格按 ^[a-zA-Z0-9_-]+$ 校验工具名的供应商会拒绝建图。
         self.assertEqual(
             [tool.name for tool in tools],
-            ["nms.query_device_by_ip", "nms.get_topology_graph", "nms.get_realtime_metric",
-             "nms.get_metric_range", "nms.list_metric_names", "nms.list_alarm_events"],
+            manifest.allowed_actions,
         )
 
     def test_manifest_config_contains_iot_agent(self) -> None:
@@ -51,7 +52,10 @@ class AgentManifestTests(unittest.TestCase):
 
         config = get_agents_config()
         self.assertIn("iot_agent", {agent.agent_id for agent in config.agents})
-        self.assertEqual(get_agent_manifest("iot_agent").skills, ["metric_trend_analysis"])
+        self.assertEqual(
+            get_agent_manifest("iot_agent").skills,
+            ["metric_trend_analysis", "alarm_root_cause", "device_health_snapshot"],
+        )
 
     def test_unknown_agent_is_rejected(self) -> None:
         """确认未注册 Agent 不能获得默认权限。"""

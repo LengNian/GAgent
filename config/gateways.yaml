@@ -18,7 +18,7 @@ platforms:
       expires_in_field: data.expires_in
     apis:
       - name: query_device_by_ip
-        description: 根据 IPv4 地址查询设备的当前状态、资源使用情况、接口、邻居、温度和近期事件。当用户询问某台设备（给出 IP）的运行状况时使用。
+        description: 根据 IPv4 地址查询设备的当前状态、资源使用情况、接口、邻居、温度和近期事件。当用户询问某台设备（给出 IP）的运行状况时使用；这是获取单设备当前状态的唯一权威来源，拓扑图结果或上一轮的历史查询结果都不能替代本工具。
         method: GET
         endpoint: /api/v1/topology/device
         timeout_seconds: 10
@@ -39,7 +39,7 @@ platforms:
           "5xx": 设备查询服务暂时不可用，请稍后重试。
       
       - name: get_topology_graph
-        description: 获取全局网络拓扑聚合图，包含所有设备节点、链路及其状态。当用户询问整体网络结构、设备间连接关系或全网概况时使用。
+        description: 获取全局网络拓扑聚合图，包含所有设备节点、链路及其状态。当用户询问整体网络结构、设备间连接关系或全网概况时使用；结果仅为聚合快照，用户追问其中某一台设备的状态或资源使用时，必须改用 query_device_by_ip 重新查询，不得直接依据本工具结果作答。
         method: GET
         endpoint: /api/v1/topology/graph
         timeout_seconds: 15

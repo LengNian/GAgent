@@ -135,7 +135,13 @@ def _build_tool(
     4. 失败结果转成 ToolMessage 文本返回给模型，不抛异常中断图执行。
     """
 
-    _, _, local_name = tool_name.partition(".")
+    # 模型可见的工具名必须是裸本地名：MCP 全名带平台前缀（如 nms.query_device_by_ip），
+    # 而部分 OpenAI 兼容供应商严格按 ^[a-zA-Z0-9_-]+$ 校验 tools[].function.name，
+    # 点号会导致 400。裸名同时与 agents.yaml 的 allowlist、SKILL.md 引用保持一致；
+    # call_tool 仍使用带前缀全名作为 MCP 侧唯一标识。
+    _, separator, local_name = tool_name.partition(".")
+    if not separator:
+        local_name = tool_name
 
     def _as_action_result(payload: dict[str, Any]) -> dict[str, Any]:
         """把网关契约补齐为 ActionResult 必需字段。"""
@@ -205,7 +211,7 @@ def _build_tool(
 
     return StructuredTool.from_function(
         coroutine=invoke_tool,
-        name=tool_name,
+        name=local_name,
         description=description,
         args_schema=_build_args_schema(tool_name, parameters),
         metadata=metadata or {},

@@ -2,7 +2,7 @@
 
 from functools import lru_cache
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     llm_base_url: str | None = Field(default=None, validation_alias="LLM_BASE_URL")
     llm_temperature: float = Field(validation_alias="LLM_TEMPERATURE")
     llm_timeout_seconds: float = Field(validation_alias="LLM_TIMEOUT_SECONDS")
+    # DeepSeek 等兼容供应商的思考模式会拒绝具名 tool_choice、要求回传
+    # reasoning_content，并静默忽略 temperature，因此提供显式关闭开关。
+    # 默认不开启，保证对不需要该参数的供应商零影响。
+    llm_disable_thinking: bool = Field(default=False, validation_alias="LLM_DISABLE_THINKING")
     mcp_gateway_url: str = Field(validation_alias="MCP_GATEWAY_URL")
     mcp_gateway_token: SecretStr = Field(validation_alias="MCP_GATEWAY_TOKEN")
     database_url: str | None = Field(default=None, validation_alias="DATABASE_URL")
@@ -225,6 +229,19 @@ class Settings(BaseSettings):
         if self.stepfun_tts_language and self.stepfun_tts_emotion:
             raise ValueError("STEPFUN_TTS_LANGUAGE and STEPFUN_TTS_EMOTION cannot both be set")
         return self
+
+    def llm_extra_body(self) -> dict[str, Any] | None:
+        """返回聊天模型请求的供应商私有参数；未启用时返回 None。
+
+        Returns:
+            开启 LLM_DISABLE_THINKING 时返回思考模式关闭参数，否则返回 None。
+            注意只有 `thinking.type=disabled` 能真正关闭思考；
+            `reasoning_effort=minimal` 会被映射为 low，仍处于思考模式。
+        """
+
+        if not self.llm_disable_thinking:
+            return None
+        return {"thinking": {"type": "disabled"}}
 
 
 # @lru_cache(maxsize=1)

@@ -140,6 +140,9 @@ def _build_memory_extraction_model(settings: Settings) -> ChatOpenAI:
     }
     if settings.llm_base_url:
         model_kwargs["base_url"] = settings.llm_base_url
+    extra_body = settings.llm_extra_body()
+    if extra_body:
+        model_kwargs["extra_body"] = extra_body
     return ChatOpenAI(**model_kwargs)
 
 
