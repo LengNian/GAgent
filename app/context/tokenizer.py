@@ -96,4 +96,11 @@ def _create_huggingface_token_counter(
         )
     except Exception as error:
         raise RuntimeError(f"Failed to load tokenizer: {tokenizer_name}") from error
+    # TODO(@verify): tokenizer 探针，用于确认运行时实际加载的是 GLM 还是 DeepSeek；验证完删除本段 print。
+    print(
+        "=== tokenizer_loaded ===\n"
+        f"class={type(tokenizer).__name__} name={tokenizer.name_or_path} vocab={tokenizer.vocab_size}\n"
+        "========================",
+        flush=True,
+    )
     return HuggingFaceTokenCounter(tokenizer)
