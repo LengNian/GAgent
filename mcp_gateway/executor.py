@@ -16,6 +16,7 @@ import httpx
 from mcp_gateway.auth import LoginTokenProvider
 from mcp_gateway.config_loader import ApiConfig, PlatformConfig
 from mcp_gateway.errors import ToolConfigurationError, ToolExecutionError
+from mcp_gateway.projections import PROJECTIONS
 
 logger = logging.getLogger(__name__)
 
@@ -151,10 +152,11 @@ async def execute_api_call(
 
 # 业务码判定
 def _parse_success_payload(api: ApiConfig, response: httpx.Response) -> dict[str, Any]:
-    """解析 200 响应并按 BaseResp 契约判定业务结果。
+    """解析 200 响应，按 BaseResp 契约判定业务结果，并按 result_projection 应用结果投影。
 
     Raises:
         ToolExecutionError: JSON 非法、结构不符或业务码非 0。
+        ToolConfigurationError: 配置声明了未注册的投影器。
     """
 
     try:
@@ -173,4 +175,12 @@ def _parse_success_payload(api: ApiConfig, response: httpx.Response) -> dict[str
             retryable=False,
         )
     data = payload.get("data")
-    return data if isinstance(data, dict) else {"result": data}
+    if not isinstance(data, dict):
+        data = {"result": data}
+    if api.result_projection is None:
+        return data
+    project = PROJECTIONS.get(api.result_projection)
+    if project is None:
+        # Literal 已限制合法取值，走到这里说明投影注册表被改坏，属于配置缺陷而非运行时异常。
+        raise ToolConfigurationError(f"API {api.name}: 未注册的结果投影器 {api.result_projection}")
+    return project(data)

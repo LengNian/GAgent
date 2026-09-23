@@ -18,7 +18,7 @@ platforms:
       expires_in_field: data.expires_in
     apis:
       - name: query_device_by_ip
-        description: 根据 IPv4 地址查询设备的当前状态、资源使用情况、接口、邻居、温度和近期事件。当用户询问某台设备（给出 IP）的运行状况时使用；这是获取单设备当前状态的唯一权威来源，拓扑图结果或上一轮的历史查询结果都不能替代本工具。
+        description: 查询单台设备的基础信息，包括设备名称、类型、型号、位置、有线或无线接入方式、端口总数与 up/down 数量、邻居数量与邻居名称。当用户询问某台设备（给出 IP）是什么设备、在哪里、有多少端口、连着谁时使用；拓扑图结果或上一轮的历史查询结果都不能替代本工具。本工具不返回任何指标数值，CPU、内存、温度、流量、信号强度等当前值用 get_realtime_metric，一段时间内的趋势用 get_metric_range。
         method: GET
         endpoint: /api/v1/topology/device
         timeout_seconds: 10
@@ -37,9 +37,10 @@ platforms:
         error_messages:
           "404": 未找到该 IP 对应的设备。
           "5xx": 设备查询服务暂时不可用，请稍后重试。
+        result_projection: device_series
       
       - name: get_topology_graph
-        description: 获取全局网络拓扑聚合图，包含所有设备节点、链路及其状态。当用户询问整体网络结构、设备间连接关系或全网概况时使用；结果仅为聚合快照，用户追问其中某一台设备的状态或资源使用时，必须改用 query_device_by_ip 重新查询，不得直接依据本工具结果作答。
+        description: 获取全局网络拓扑聚合图，包含所有设备节点、链路及其状态。当用户询问整体网络结构、设备间连接关系或全网概况时使用；结果仅为聚合快照，用户追问某一台设备的详情时，必须改用 query_device_by_ip 查询设备基础信息，或改用 get_realtime_metric、get_metric_range 查询指标数值，不得直接依据本工具结果作答。
         method: GET
         endpoint: /api/v1/topology/graph
         timeout_seconds: 15
@@ -52,9 +53,10 @@ platforms:
           required: []
         error_messages:
           "5xx": 拓扑服务暂时不可用，请稍后重试。
+        result_projection: topology_graph
       
       - name: get_realtime_metric
-        description: 查询指定设备 IP 上某个监控指标的实时瞬时值，可选按速率计算（如流量速率）。当用户询问某设备某指标的当前数值时使用。
+        description: 查询指定设备 IP 上某个监控指标的实时瞬时值，可选按速率计算（如流量速率）。当用户询问某设备某指标的当前数值时使用；设备具体指标的数值一律走本工具，不要从 query_device_by_ip 的返回结果推断。
         method: GET
         endpoint: /api/v1/metric/metrics/realtime
         timeout_seconds: 10
@@ -72,7 +74,7 @@ platforms:
               description: 设备 IPv4 地址
             metric:
               type: string
-              description: 指标名称，例如 sysName、hrProcessorLoad、ifHCInOctets
+              description: 指标的精确名称，必须是本轮 list_metric_names 返回结果中逐字出现的字符串；不得自行拼写、翻译或缩写用户说的中文指标名，本轮没有该设备的名称列表时先调用 list_metric_names
             rate:
               type: boolean
               description: 是否计算速率，仅对流类指标（如流量）有意义，默认 false
@@ -82,7 +84,7 @@ platforms:
           "5xx": 指标查询服务暂时不可用，请稍后重试。
           
       - name: get_metric_range
-        description: 查询指定设备 IP 上某个监控指标的时间序列数据，默认返回最近 1 小时。当用户询问指标的历史趋势或时间段变化时使用。
+        description: 查询指定设备 IP 上某个监控指标的时间序列数据，默认返回最近 1 小时。当用户询问指标的历史趋势或时间段变化时使用；设备指标随时间的变化一律走本工具，不要从 query_device_by_ip 的返回结果推断趋势。
         method: GET
         endpoint: /api/v1/metric/metrics/range
         timeout_seconds: 15
@@ -103,7 +105,7 @@ platforms:
               description: 设备 IPv4 地址
             metric:
               type: string
-              description: 指标名称
+              description: 指标的精确名称，必须是本轮 list_metric_names 返回结果中逐字出现的字符串；不得自行拼写、翻译或缩写用户说的中文指标名，本轮没有该设备的名称列表时先调用 list_metric_names
             start:
               type: string
               description: 起始时间，可填 Unix 秒或相对时间（如 30m、1h、7d）；默认最近 1 小时。
@@ -122,7 +124,7 @@ platforms:
           "5xx": 指标查询服务暂时不可用，请稍后重试。
       
       - name: list_metric_names
-        description: 列出指定设备（可按 IP 过滤）上可用的监控指标名称。当用户不知道有哪些指标可查、或需要确认指标名拼写时使用。
+        description: 列出指定设备可用的监控指标名称，是调用指标工具时指标名的唯一合法来源。在调用 get_realtime_metric 或 get_metric_range 之前，若本轮还没有该设备的指标名称列表，必须先调用本工具；用户说的中文指标名不是合法参数，需在本工具返回的列表中确认逐字相同的精确名称。
         method: GET
         endpoint: /api/v1/metric/metrics/list
         timeout_seconds: 10

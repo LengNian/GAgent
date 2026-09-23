@@ -271,15 +271,12 @@ def _validated_memory_inputs(
 
     # =========================================================================
     # [逻辑规划]
-    # 1. 拒绝超过单轮候选上限的输出，防止模型异常时批量污染记忆库。
-    # 2. 校验证据 seq 属于本轮输入，且每条长期记忆均有用户消息证据。
-    # 3. 按配置过滤过低重要度和过长正文，避免低价值、不可控内容入库。
-    # 4. 仅返回通过全部规则的候选；单条非法候选被跳过，不阻断其他有效候选。
+    # 1. 校验证据 seq 属于本轮输入，且每条长期记忆均有用户消息证据。
+    # 2. 按配置过滤过低重要度和过长正文，避免低价值、不可控内容入库。
+    # 3. 单条非法候选被跳过，不阻断其他有效候选。
+    # 4. 有效候选超过单轮上限时，按重要度降序保留前 N 条，重要度相同者保持原序；
+    #    截断而非整轮丢弃，避免用户并列表达多个对象时一条记忆都写不进。
     # =========================================================================
-    if len(extraction.memories) > settings.long_term_memory_max_candidates:
-        logger.warning("long_term_memory_candidate_limit_exceeded")
-        return []
-
     messages_by_seq = {message.seq: message for message in messages}
     validated_inputs: list[LongTermMemoryInput] = []
     for candidate in extraction.memories:
@@ -306,6 +303,13 @@ def _validated_memory_inputs(
                 evidence_message_seqs=evidence_message_seqs,
             )
         )
+
+    limit = settings.long_term_memory_max_candidates
+    if len(validated_inputs) > limit:
+        logger.warning("long_term_memory_candidate_limit_truncated")
+        validated_inputs = sorted(
+            validated_inputs, key=lambda memory: memory.importance, reverse=True
+        )[:limit]
     return validated_inputs
 
 

@@ -57,8 +57,8 @@ def parse_report_response(content: object, fallback_emotion: str) -> tuple[str, 
 
 
 def report_payload(result: ActionResult, max_chars: int = 81920) -> dict[str, Any]:
-    """构造 Report 输入，并对拓扑结果生成专用事实摘要。"""
-    data = summarize_topology_graph(result.data) if result.ok and result.action_name == "get_topology_graph" else (result.data if result.ok else None)
+    """构造 Report 输入；数据形状的加工已由网关结果投影完成，这里只做预算兜底。"""
+    data = result.data if result.ok else None
     data, truncated = compact_report_value(data, max_chars)
     payload = {"ok": result.ok, "action_name": result.action_name, "data": data,
                "error_code": result.error_code if not result.ok else None,

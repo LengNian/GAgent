@@ -77,6 +77,9 @@ class ApiConfig(BaseModel):
     argument_locations: dict[str, Literal["path", "query", "body"]] = Field(default_factory=dict)
     input_schema: dict[str, Any]
     error_messages: dict[str, str] = Field(default_factory=dict)
+    # 返回给 Agent 前应用的投影器名字，须与 mcp_gateway.projections.PROJECTIONS 的键一致；
+    # 用 Literal 而非 str，是为了让“配了名字但没注册投影函数”在配置加载期就报错。
+    result_projection: Literal["topology_graph", "device_series"] | None = None
 
     @model_validator(mode="after")
     def locations_and_schema_must_align(self) -> "ApiConfig":

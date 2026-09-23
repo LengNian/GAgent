@@ -124,7 +124,7 @@ class Settings(BaseSettings):
         default=True, validation_alias="LONG_TERM_MEMORY_SEMANTIC_DEDUP_ENABLED"
     )
     long_term_memory_semantic_dedup_distance: float = Field(
-        default=0.2,
+        default=0.08,
         validation_alias="LONG_TERM_MEMORY_SEMANTIC_DEDUP_DISTANCE",
         ge=0,
         le=2,

@@ -17,7 +17,7 @@ _DEFAULT_AUTH_DATA: dict[str, Any] = {
         "mfa_enabled": True,
         "roles": ["string"],
         "tenant_id": "string",
-        "user_id": "user-admin-001",
+        "user_id": "user-admin-003",
         "username": "admin",
     },
 }
