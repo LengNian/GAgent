@@ -134,21 +134,67 @@ class PlatformConfig(BaseModel):
         return self
 
 
+class McpServerConfig(BaseModel):
+    """外部 MCP Server 的联邦接入配置。
+
+    与 PlatformConfig（REST 中台）并列：PlatformConfig 把 REST API 转成 MCP 工具，
+    McpServerConfig 直接代理一个已经是 MCP 协议的上游服务，网关作为其客户端。
+    接入新外部能力（天气、搜索等）只需在 gateways.yaml 追加一节，不改网关代码。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, pattern=r"^[a-z][a-z0-9_]*$")
+    # stdio：网关 fork 子进程并通过管道通信；sse：连接已部署的 HTTP/SSE 端点。
+    transport: Literal["stdio", "sse"] = "stdio"
+    command: str | None = None  # stdio 必填：要执行的可执行文件（如 npx）
+    args: list[str] = Field(default_factory=list)  # stdio：传给 command 的参数
+    url: str | None = None  # sse 必填：上游端点，支持 env:VAR 引用
+    # 上游进程所需环境变量，值支持 env:VAR 引用（敏感值不落明文，与中台凭证同规则）。
+    env: dict[str, str] = Field(default_factory=dict)
+    timeout_seconds: float = Field(default=30, gt=0)
+
+    @model_validator(mode="after")
+    def transport_fields_must_match(self) -> "McpServerConfig":
+        """按 transport 校验必填字段，避免配置错误延迟到运行期才发现。"""
+
+        if self.transport == "stdio" and not self.command:
+            raise ValueError(f"mcp_server {self.name}: transport=stdio 必须提供 command")
+        if self.transport == "sse" and not self.url:
+            raise ValueError(f"mcp_server {self.name}: transport=sse 必须提供 url")
+        return self
+
+
 class GatewaySettings(BaseModel):
     """gateways.yaml 的解析结果，网关所有模块的唯一配置来源。"""
 
     model_config = ConfigDict(extra="forbid")
 
-    platforms: list[PlatformConfig] = Field(min_length=1)
+    # 允许 platforms 为空：网关可只联邦外部 MCP Server 而不代理任何 REST 中台。
+    platforms: list[PlatformConfig] = Field(default_factory=list)
+    mcp_servers: list[McpServerConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def must_have_at_least_one_source(self) -> "GatewaySettings":
+        """REST 中台与外部 MCP 至少配置一个，否则网关无任何可注册工具。"""
+
+        if not self.platforms and not self.mcp_servers:
+            raise ValueError("gateways.yaml 至少需要配置一个 platform 或 mcp_server")
+        return self
 
     @model_validator(mode="after")
     def platform_names_must_be_unique(self) -> "GatewaySettings":
-        """中台名即工具名前缀，重名会导致工具路由歧义。"""
+        """中台名与服务名共享工具名前缀空间，重名会导致工具路由歧义。
+
+        平台前缀即 `前缀.工具名` 中的前缀，REST 中台与外部 MCP 用同一命名契约，
+        因此两类名字必须全局唯一（而非各自内部唯一即可）。
+        """
 
         names = [platform.name for platform in self.platforms]
+        names += [server.name for server in self.mcp_servers]
         duplicates = {name for name in names if names.count(name) > 1}
         if duplicates:
-            raise ValueError(f"存在重复的中台名: {sorted(duplicates)}")
+            raise ValueError(f"存在重复的中台/服务名: {sorted(duplicates)}")
         return self
 
     def resolve_base_url(self, platform: PlatformConfig) -> str:

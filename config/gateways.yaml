@@ -191,3 +191,14 @@ platforms:
           "401": 未认证，请检查 NMS 登录状态。
           "403": 当前账号没有查询告警事件的权限。
           "5xx": 告警服务暂时不可用，请稍后重试。
+
+# 外部 MCP Server 联邦接入：网关作为上游 MCP 客户端，启动时发现其工具并以
+# `服务名.工具名` 重新暴露。接入新的外部能力只需在此追加一节，不改网关代码。
+mcp_servers:
+  - name: weather
+    transport: stdio
+    command: "npx"
+    args: ["-y", "open-meteo-mcp"]
+    # Open-Meteo 免费无需 API Key；如上游需要凭证，写 env:VAR_NAME 引用环境变量。
+    env: {}
+    timeout_seconds: 60

@@ -18,12 +18,15 @@ agents:
   - agent_id: iot_agent
     description: 负责物联网设备查询、指标监控和拓扑查看。
     allowed_actions:
+      # 中台API
       - query_device_by_ip
       - get_topology_graph
       - get_realtime_metric
       - get_metric_range
       - list_metric_names
       - list_alarm_events
+      # 外部MCP
+      - get_weather
     skills:
       - metric_trend_analysis
       - alarm_root_cause

@@ -27,6 +27,7 @@ from mcp_gateway.config_loader import (
 )
 from mcp_gateway.errors import GatewayError, ToolAuthError
 from mcp_gateway.executor import execute_api_call
+from mcp_gateway.federation import build_federation_tools
 
 logger = logging.getLogger(__name__)
 
@@ -156,18 +157,34 @@ def create_gateway_app(config_path: str = "config/gateways.yaml") -> FastMCP:
 
     settings: GatewaySettings = load_gateway_settings(config_path)
     clients: list[httpx.AsyncClient] = []
+    mcp_servers: list = list(settings.mcp_servers)
 
     @asynccontextmanager
     async def gateway_lifespan(_server: FastMCP):
-        """在网关停止时关闭复用的中台 HTTP 客户端。"""
+        """启动时联邦注册外部 MCP 工具，停止时关闭复用的中台 HTTP 客户端。"""
 
         # =========================================================================
-        # [逻辑规划] 生命周期资源回收
+        # [逻辑规划] 生命周期资源回收与外部 MCP 联邦
         # =========================================================================
-        # 1. 启动阶段交出已注册工具使用的 HTTP 客户端。
-        # 2. 停止阶段逐个关闭客户端，释放 keep-alive 连接与连接池资源。
-        # 3. 单个关闭失败不阻塞其余客户端回收。
+        # 1. 启动阶段先注册外部 MCP Server 的代理工具：必须在 serving loop 内做
+        #    异步发现（create_gateway_app 是同步函数，且测试会在已运行的 loop 内调用
+        #    它，无法再嵌套 asyncio.run）。
+        # 2. 单个上游发现失败只告警跳过，不因一个坏外部依赖阻断整个网关启动。
+        # 3. 停止阶段逐个关闭中台 HTTP 客户端，单个失败不阻塞其余回收。
         # =========================================================================
+        for server_config in mcp_servers:
+            try:
+                proxy_tools = await build_federation_tools(server_config)
+            except Exception as error:  # noqa: BLE001 - 外部依赖不可达不应阻断网关
+                logger.warning(
+                    "federation_discovery_failed server=%s error=%s",
+                    server_config.name,
+                    error,
+                )
+                continue
+            for proxy_tool in proxy_tools:
+                _server.add_tool(proxy_tool)
+                logger.info("gateway_tool_registered name=%s", proxy_tool.name)
         try:
             yield
         finally:
