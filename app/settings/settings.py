@@ -23,6 +23,10 @@ class Settings(BaseSettings):
     llm_base_url: str | None = Field(default=None, validation_alias="LLM_BASE_URL")
     llm_temperature: float = Field(validation_alias="LLM_TEMPERATURE")
     llm_timeout_seconds: float = Field(validation_alias="LLM_TIMEOUT_SECONDS")
+    # 单次回复的最大输出 token（输出侧上限，非目标；用于兜底防止话痨失控计费）。
+    llm_max_output_tokens: int = Field(
+        default=10240, validation_alias="LLM_MAX_OUTPUT_TOKENS", ge=1
+    )
     # DeepSeek 等兼容供应商的思考模式会拒绝具名 tool_choice、要求回传
     # reasoning_content，并静默忽略 temperature，因此提供显式关闭开关。
     # 默认不开启，保证对不需要该参数的供应商零影响。

@@ -16,6 +16,7 @@ from app.db.connection import close_pool
 from app.settings import get_settings
 from app.observability import configure_logging
 from app.startup import validate_startup_configuration
+from app.tracing import init_tracing, shutdown_tracing
 
 
 FRONTEND_DIRECTORY = Path(__file__).resolve().parent.parent / "frontend"
@@ -33,10 +34,14 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     configure_logging()
     validate_startup_configuration()
+    # Phoenix 追踪必须在 LangGraph / ChatModel 构建之前注册，否则已实例化的
+    # Runnable 无法被 LangChainInstrumentor patch 到；PHOENIX_ENABLED=false 时零副作用。
+    init_tracing()
     await open_checkpointer(get_settings().database_url)
     try:
         yield
     finally:
+        shutdown_tracing()
         await close_checkpointer()
         close_pool()
 

@@ -82,6 +82,7 @@ platforms:
         error_messages:
           "404": 未找到该设备或指标。
           "5xx": 指标查询服务暂时不可用，请稍后重试。
+        result_projection: metric_series
           
       - name: get_metric_range
         description: 查询指定设备 IP 上某个监控指标的时间序列数据，默认返回最近 1 小时。当用户询问指标的历史趋势或时间段变化时使用；设备指标随时间的变化一律走本工具，不要从 query_device_by_ip 的返回结果推断趋势。
@@ -108,13 +109,13 @@ platforms:
               description: 指标的精确名称，必须是本轮 list_metric_names 返回结果中逐字出现的字符串；不得自行拼写、翻译或缩写用户说的中文指标名，本轮没有该设备的名称列表时先调用 list_metric_names
             start:
               type: string
-              description: 起始时间，可填 Unix 秒或相对时间（如 30m、1h、7d）；默认最近 1 小时。
+              description: 起始时间。写法是把用户说的时长原样写出、不加负号：过去 30 分钟写 30m、过去 12 小时写 12h、过去 7 天写 7d，也可填 10 位 Unix 秒；默认最近 1 小时。反例：-12h 会被解析成未来时间，导致窗口倒挂、返回空数据。
             end:
               type: string
-              description: 结束时间，填 Unix 秒；默认当前时间。
+              description: 结束时间，只接受 10 位 Unix 秒或不带负号的相对时长；必须晚于 start，默认当前时间。
             step:
               type: integer
-              description: 采样步长（秒）；默认 15。
+              description: 采样步长（秒），中台按此重采样，直接决定返回点数：12 小时窗口用 15 会得到约 2880 点/序列。选值：窗口 1 小时内用默认 15 看细节；超过 2 小时至少 300；超过 8 小时至少 900；超过 24 小时用 3600。
             rate:
               type: boolean
               description: 计数器类指标是否计算速率；默认 false。
@@ -122,6 +123,8 @@ platforms:
         error_messages:
           "404": 未找到该设备或指标。
           "5xx": 指标查询服务暂时不可用，请稍后重试。
+        argument_guard: time_window
+        result_projection: metric_series
       
       - name: list_metric_names
         description: 列出指定设备可用的监控指标名称，是调用指标工具时指标名的唯一合法来源。在调用 get_realtime_metric 或 get_metric_range 之前，若本轮还没有该设备的指标名称列表，必须先调用本工具；用户说的中文指标名不是合法参数，需在本工具返回的列表中确认逐字相同的精确名称。

@@ -97,30 +97,6 @@ def compact_report_value(value: Any, remaining_chars: int) -> tuple[Any, bool]:
     return value, False
 
 
-def summarize_topology_graph(data: Any) -> dict[str, Any]:
-    """提取拓扑节点 IP、名称、状态和链路数量。"""
-    if not isinstance(data, dict):
-        return {"node_count": 0, "edge_count": 0, "ip_count": 0, "ip_addresses": [], "nodes": []}
-    nodes = data.get("nodes") if isinstance(data.get("nodes"), list) else []
-    edges = data.get("edges") if isinstance(data.get("edges"), list) else []
-    summaries: list[dict[str, str]] = []
-    ips: list[str] = []
-    statuses: dict[str, int] = {}
-    for node in nodes:
-        node_data = node.get("data") if isinstance(node, dict) else None
-        if not isinstance(node_data, dict):
-            continue
-        summary = {out: node_data[src] for out, src in (("ip", "ip"), ("device_name", "deviceName"), ("label", "label"), ("status", "status"), ("type", "icon")) if isinstance(node_data.get(src), str) and node_data[src]}
-        if summary:
-            summaries.append(summary)
-        if summary.get("ip") and summary["ip"] not in ips:
-            ips.append(summary["ip"])
-        if summary.get("status"):
-            status = summary["status"]
-            statuses[status] = statuses.get(status, 0) + 1
-    return {"node_count": len(nodes), "edge_count": len(edges), "status_counts": statuses, "ip_count": len(ips), "ip_addresses": ips, "nodes": summaries}
-
-
 async def report_result_for_messages(messages: list[Any], model: BaseChatModel) -> tuple[str, str]:
     """从工具消息生成最终报告，作为 Report Node 的稳定入口。"""
     results: list[ActionResult] = []

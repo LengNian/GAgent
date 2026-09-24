@@ -13,6 +13,7 @@ from typing import Any
 
 import httpx
 
+from mcp_gateway.argument_guards import GUARDS
 from mcp_gateway.auth import LoginTokenProvider
 from mcp_gateway.config_loader import ApiConfig, PlatformConfig
 from mcp_gateway.errors import ToolConfigurationError, ToolExecutionError
@@ -55,6 +56,8 @@ async def execute_api_call(
     逻辑规划：
     1. [参数路由] 按 argument_locations 把参数分发到 path、query、body。
        - 约束: path 参数缺失属于网关配置错误（schema 已保证必填，此处防御 path 占位符）。
+    1.5 [入参校验] 声明了 argument_guard 的 API 先过参数关卡，不通过直接报错、不发请求。
+       - 原因: 中台对部分非法入参静默返回空结果，不拦住就会让 Agent 把参数错误说成“设备没数据”。
     2. [鉴权] 从 token_provider 取 token，注入 Authorization: Bearer。
     3. [执行] 按配置做指数退避重试；网络错误与 5xx 可重试，400/404 不重试。
     4. [401 处理] token 失效时强制刷新并重放一次，重放仍 401 才报错。
@@ -72,8 +75,8 @@ async def execute_api_call(
     Returns:
         中台响应中的 data 字段。
     Raises:
-        ToolConfigurationError: 网关配置缺陷（path 占位符缺参等）。
-        ToolExecutionError: 网络、状态码或业务码失败。
+        ToolConfigurationError: 网关配置缺陷（path 占位符缺参、未注册的投影器/关卡）。
+        ToolExecutionError: 网络、状态码、业务码失败，或参数关卡判定入参非法。
     """
     # 参数路由
     path_arguments = {
@@ -96,6 +99,21 @@ async def execute_api_call(
         for name, value in arguments.items()
         if api.argument_locations.get(name) == "body"
     }
+
+    # 参数关卡：在重试循环之外执行一次，校验失败不该白白消耗重试次数
+    if api.argument_guard is not None:
+        guard = GUARDS.get(api.argument_guard)
+        if guard is None:
+            # Literal 已限制合法取值，走到这里说明校验器注册表被改坏，属于配置缺陷。
+            raise ToolConfigurationError(f"API {api.name}: 未注册的参数校验器 {api.argument_guard}")
+        await guard(
+            platform=platform,
+            api=api,
+            base_url=base_url,
+            token_provider=token_provider,
+            client=client,
+            arguments=arguments,
+        )
 
     # 重试主循环
     max_attempts = api.retry_attempts + 1

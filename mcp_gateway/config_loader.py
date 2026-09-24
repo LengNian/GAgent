@@ -79,7 +79,10 @@ class ApiConfig(BaseModel):
     error_messages: dict[str, str] = Field(default_factory=dict)
     # 返回给 Agent 前应用的投影器名字，须与 mcp_gateway.projections.PROJECTIONS 的键一致；
     # 用 Literal 而非 str，是为了让“配了名字但没注册投影函数”在配置加载期就报错。
-    result_projection: Literal["topology_graph", "device_series"] | None = None
+    result_projection: Literal["topology_graph", "device_series", "metric_series"] | None = None
+    # 请求中台之前必须通过的参数校验器名字，须与 mcp_gateway.argument_guards.GUARDS 的键一致。
+    # 与 result_projection 对称，同样用 Literal 换取值拼错在启动期暴露。
+    argument_guard: Literal["time_window"] | None = None
 
     @model_validator(mode="after")
     def locations_and_schema_must_align(self) -> "ApiConfig":
@@ -104,6 +107,9 @@ class ApiConfig(BaseModel):
             raise ValueError(f"API {self.name}: GET 请求不能有 body 参数")
         if self.risk_level in {"high", "critical"} and not self.requires_confirmation:
             raise ValueError(f"API {self.name}: 高风险操作必须要求人工确认")
+        # 校验器依赖具体参数存在；配了却没声明参数属于配置错，不能留到运行期才发现
+        if self.argument_guard == "time_window" and not {"start", "end"} & set(properties):
+            raise ValueError(f"API {self.name}: argument_guard=time_window 要求声明 start 或 end 参数")
         return self
 
 

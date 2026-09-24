@@ -16,6 +16,7 @@ def build_model(settings: Settings) -> BaseChatModel:
         "model": settings.llm_model,
         "temperature": settings.llm_temperature,
         "timeout": settings.llm_timeout_seconds,
+        "max_tokens": settings.llm_max_output_tokens,
     }
     if settings.llm_base_url:
         model_kwargs["base_url"] = settings.llm_base_url
