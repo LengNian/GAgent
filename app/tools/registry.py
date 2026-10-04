@@ -180,9 +180,14 @@ def _build_tool(
     async def invoke_tool(**arguments: object) -> str:
         """执行网关工具调用（每次调用建立独立 MCP 会话）。"""
 
+        # 剔除值为 None 的可选参数：args_schema 会把模型未提供的可选字段补成 None，
+        # 但部分上游工具（如和风 get_weather_now）把可选参数声明为带默认值的非空类型，
+        # 显式传 None 会触发校验失败、迫使模型重试补参。不传即让上游套用自身默认值，
+        # 与 REST 执行器 `if value is not None` 的过滤约定保持一致。
+        filtered_arguments = {name: value for name, value in arguments.items() if value is not None}
         try:
             async with _create_client(gateway_url, gateway_token) as client:
-                result = await client.call_tool(tool_name, dict(arguments))
+                result = await client.call_tool(tool_name, filtered_arguments)
             payload = _parse_gateway_payload(result.content)
         except ToolError as error:
             # 网关以 is_error 结果返回契约错误（fastmcp 客户端转成 ToolError），

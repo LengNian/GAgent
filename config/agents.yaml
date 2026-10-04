@@ -26,11 +26,14 @@ agents:
       - list_metric_names
       - list_alarm_events
       # 外部MCP
+      - get_weather_now
       - get_weather
+
     skills:
       - metric_trend_analysis
       - alarm_root_cause
       - device_health_snapshot
+      - weather_aware_injection
     prompt: prompts/iot_agent.md
     runtime:
       max_steps: 50

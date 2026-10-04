@@ -71,5 +71,7 @@ def _default_tools() -> dict[str, dict[str, Any]]:
             "nms.get_metric_range",
             "nms.list_metric_names",
             "nms.list_alarm_events",
+            "weather.get_weather_now",
+            "weather.get_weather",
         )
     }

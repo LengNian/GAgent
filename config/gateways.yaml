@@ -197,8 +197,12 @@ platforms:
 mcp_servers:
   - name: weather
     transport: stdio
-    command: "npx"
-    args: ["-y", "open-meteo-mcp"]
-    # Open-Meteo 免费无需 API Key；如上游需要凭证，写 env:VAR_NAME 引用环境变量。
-    env: {}
+    command: "uvx"
+    # --with "mcp<2"：hefeng 包基于旧版 mcp SDK 编写，mcp 2.x 已将 mcp.server.fastmcp
+    # 重命名，不约束会 ModuleNotFoundError 启动失败；强制解析到 mcp 1.x。
+    args: ["--with", "mcp<2", "hefeng-qweather-mcp", "stdio"]
+    # 和风天气需鉴权：API Host 和 Key 从环境变量取（config/.env），不落明文。
+    env:
+      HEFENG_API_HOST: env:HEFENG_API_HOST
+      HEFENG_API_KEY: env:HEFENG_API_KEY
     timeout_seconds: 60

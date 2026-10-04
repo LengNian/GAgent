@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
@@ -98,9 +98,14 @@ def compact_report_value(value: Any, remaining_chars: int) -> tuple[Any, bool]:
 
 
 async def report_result_for_messages(messages: list[Any], model: BaseChatModel) -> tuple[str, str]:
-    """从工具消息生成最终报告，作为 Report Node 的稳定入口。"""
+    """从工具消息和模型推理生成最终报告，作为 Report Node 的稳定入口。"""
     results: list[ActionResult] = []
+    model_reasoning: list[str] = []
     for message in messages:
+        if isinstance(message, AIMessage) and message.content and not message.tool_calls:
+            # 模型在拿到工具结果后的推理（如 Skill 映射计算），作为报告补充上下文。
+            model_reasoning.append(str(message.content))
+            continue
         if not isinstance(message, ToolMessage):
             continue
         content = message.content
@@ -120,9 +125,15 @@ async def report_result_for_messages(messages: list[Any], model: BaseChatModel) 
     fallback_text = "当前操作未能完成，系统已阻止不可信结果返回。" if fallback else "设备查询已完成，但结果摘要生成失败，请稍后重试。"
     fallback_emotion = fallback_report_emotion(fallback)
     try:
+        report_input: dict[str, Any] = {
+            "results": [report_payload(item, max(2000, 81920 // len(results))) for item in results],
+        }
+        if model_reasoning:
+            # 把模型基于 Skill 的推理结果一并传入，report 模型可以在此基础上组织最终回复。
+            report_input["model_analysis"] = "\n\n".join(model_reasoning)
         response = await model.ainvoke([
             SystemMessage(content=get_report_prompt()),
-            HumanMessage(content=json.dumps({"results": [report_payload(item, max(2000, 81920 // len(results))) for item in results]}, ensure_ascii=False)),
+            HumanMessage(content=json.dumps(report_input, ensure_ascii=False)),
         ])
         text, emotion = parse_report_response(
             getattr(response, "content", ""),
