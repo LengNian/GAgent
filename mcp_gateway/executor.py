@@ -89,11 +89,16 @@ async def execute_api_call(
     except KeyError as error:
         raise ToolConfigurationError(f"API {api.name} 的路径缺少参数占位符: {error}") from error
 
+    # 出站前按 query_names 改名：工具侧参数名必须能当 Python 形参，中台侧名字由配置映射
     query_parameters = {
-        name: _stringify_argument(value)
+        api.query_names.get(name, name): _stringify_argument(value)
         for name, value in arguments.items()
         if api.argument_locations.get(name) == "query"
     }
+    # 配置钉死的常量参数最后并入：同名时以常量为准，保证 mode 这类语义参数无法被模型改写。
+    query_parameters.update(
+        {name: _stringify_argument(value) for name, value in api.constant_query.items()}
+    )
     body = {
         name: value
         for name, value in arguments.items()

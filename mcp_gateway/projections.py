@@ -409,15 +409,16 @@ def metric_series(data: Any) -> Any:
     summaries = [_metric_series_summary(folded[index], sample_limit) for index in kept]
     for summary in summaries:
         summary.pop("sampled", None)
-    seconds_start, seconds_end = data.get("start"), data.get("end")
+    # 新中台把窗口回显改名成 from/to（旧字段为 start/end）；对外投影仍沿用原有键名，Agent 侧契约零改动。
+    seconds_start, seconds_end = data.get("from"), data.get("to")
     window: dict[str, Any] = {"step_seconds": data.get("step")}
     if isinstance(seconds_start, (int, float)) and isinstance(seconds_end, (int, float)) and seconds_end >= seconds_start:
         window = {"from": _metric_time_label(seconds_start), "to": _metric_time_label(seconds_end),
                   "hours": _metric_round((seconds_end - seconds_start) / 3600), **window}
 
     projected: dict[str, Any] = {
-        "ip": data.get("ip"),
-        "metric": data.get("metric"),
+        "ip": data.get("mgmt_ip"),
+        "metric": data.get("metric_code"),
         "rate": data.get("rate"),
         "window": window,
         "series_count": len(summaries),

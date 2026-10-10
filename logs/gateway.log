@@ -1,0 +1,378 @@
+2026-10-10 09:49:40,290 INFO __main__ gateway_tool_registered name=nms.query_device_by_ip
+2026-10-10 09:49:40,292 INFO __main__ gateway_tool_registered name=nms.get_topology_graph
+2026-10-10 09:49:40,294 INFO __main__ gateway_tool_registered name=nms.get_realtime_metric
+2026-10-10 09:49:40,298 INFO __main__ gateway_tool_registered name=nms.get_metric_range
+2026-10-10 09:49:40,300 INFO __main__ gateway_tool_registered name=nms.list_metric_names
+2026-10-10 09:49:40,303 INFO __main__ gateway_tool_registered name=nms.list_alarm_events
+INFO:     Started server process [3108458]
+INFO:     Waiting for application startup.
+2026-10-10 09:49:42,155 - hefeng_qweather_mcp - INFO - 使用API KEY认证模式
+2026-10-10 09:49:42,155 - hefeng_qweather_mcp - INFO - API主机: mf6mtem9b3.re.qweatherapi.com
+2026-10-10 09:49:42,155 - hefeng_qweather_mcp - INFO - API KEY: fe297e1562...
+2026-10-10 09:49:42,201 - hefeng_qweather_mcp - INFO - 正在启动和风天气MCP服务...
+2026-10-10 09:49:42,201 - hefeng_qweather_mcp - INFO - API主机: mf6mtem9b3.re.qweatherapi.com
+2026-10-10 09:49:42,202 - hefeng_qweather_mcp - INFO - API KEY: fe297e1562...
+2026-10-10 09:49:42,202 - hefeng_qweather_mcp - INFO - 服务启动成功，等待连接...
+2026-10-10 09:49:42,217 - root - WARNING - Failed to validate request: 31 validation errors for ClientRequest
+PingRequest.method
+  Input should be 'ping' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+InitializeRequest.method
+  Input should be 'initialize' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+InitializeRequest.params.protocolVersion
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+InitializeRequest.params.capabilities
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+InitializeRequest.params.clientInfo
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CompleteRequest.method
+  Input should be 'completion/complete' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CompleteRequest.params.ref
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CompleteRequest.params.argument
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+SetLevelRequest.method
+  Input should be 'logging/setLevel' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+SetLevelRequest.params.level
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+GetPromptRequest.method
+  Input should be 'prompts/get' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetPromptRequest.params.name
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListPromptsRequest.method
+  Input should be 'prompts/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ListResourcesRequest.method
+  Input should be 'resources/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ListResourceTemplatesRequest.method
+  Input should be 'resources/templates/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ReadResourceRequest.method
+  Input should be 'resources/read' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ReadResourceRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+SubscribeRequest.method
+  Input should be 'resources/subscribe' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+SubscribeRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+UnsubscribeRequest.method
+  Input should be 'resources/unsubscribe' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+UnsubscribeRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CallToolRequest.method
+  Input should be 'tools/call' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CallToolRequest.params.name
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListToolsRequest.method
+  Input should be 'tools/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskRequest.method
+  Input should be 'tasks/get' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+GetTaskPayloadRequest.method
+  Input should be 'tasks/result' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskPayloadRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListTasksRequest.method
+  Input should be 'tasks/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CancelTaskRequest.method
+  Input should be 'tasks/cancel' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CancelTaskRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...lientCapabilities': {}}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+2026-10-10 09:49:42,222 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+2026-10-10 09:49:42,228 INFO mcp_gateway.federation federation_tools_registered server=weather count=23
+2026-10-10 09:49:42,228 INFO __main__ gateway_tool_registered name=weather.get_weather
+2026-10-10 09:49:42,228 INFO __main__ gateway_tool_registered name=weather.get_warning
+2026-10-10 09:49:42,228 INFO __main__ gateway_tool_registered name=weather.get_indices
+2026-10-10 09:49:42,228 INFO __main__ gateway_tool_registered name=weather.get_air_quality
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_air_quality_history
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_weather_history
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_hourly_weather
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_weather_now
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_minutely_5m
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_astronomy_moon
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_astronomy_sun
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_grid_weather_now
+2026-10-10 09:49:42,229 INFO __main__ gateway_tool_registered name=weather.get_grid_weather_daily
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.get_grid_weather_hourly
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.get_air_quality_hourly
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.get_air_quality_daily
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.get_air_quality_stations
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.get_top_cities
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.search_poi
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.search_poi_range
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.get_storm_list
+2026-10-10 09:49:42,230 INFO __main__ gateway_tool_registered name=weather.get_storm_track
+2026-10-10 09:49:42,231 INFO __main__ gateway_tool_registered name=weather.get_storm_forecast
+2026-10-10 09:49:42,231 INFO mcp.server.streamable_http_manager StreamableHTTP session manager started
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8001 (Press CTRL+C to quit)
+INFO:     127.0.0.1:39190 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39190 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39192 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39194 - "POST /mcp HTTP/1.1" 200 OK
+2026-10-10 09:50:50,311 INFO httpx HTTP Request: POST http://192.168.1.81:8888/api/v1/iam/login "HTTP/1.1 200 OK"
+2026-10-10 09:50:50,312 INFO mcp_gateway.auth gateway_login_succeeded expires_in_seconds=86400
+2026-10-10 09:50:50,543 INFO httpx HTTP Request: GET http://192.168.1.81:8888/api/v1/topology/graph "HTTP/1.1 200 OK"
+INFO:     127.0.0.1:39194 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39194 - "POST /mcp HTTP/1.1" 200 OK
+2026-10-10 09:50:50,970 - hefeng_qweather_mcp - INFO - 使用API KEY认证模式
+2026-10-10 09:50:50,970 - hefeng_qweather_mcp - INFO - API主机: mf6mtem9b3.re.qweatherapi.com
+2026-10-10 09:50:50,970 - hefeng_qweather_mcp - INFO - API KEY: fe297e1562...
+2026-10-10 09:50:51,016 - hefeng_qweather_mcp - INFO - 正在启动和风天气MCP服务...
+2026-10-10 09:50:51,016 - hefeng_qweather_mcp - INFO - API主机: mf6mtem9b3.re.qweatherapi.com
+2026-10-10 09:50:51,016 - hefeng_qweather_mcp - INFO - API KEY: fe297e1562...
+2026-10-10 09:50:51,016 - hefeng_qweather_mcp - INFO - 服务启动成功，等待连接...
+2026-10-10 09:50:51,031 - root - WARNING - Failed to validate request: 31 validation errors for ClientRequest
+PingRequest.method
+  Input should be 'ping' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+InitializeRequest.method
+  Input should be 'initialize' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+InitializeRequest.params.protocolVersion
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+InitializeRequest.params.capabilities
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+InitializeRequest.params.clientInfo
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CompleteRequest.method
+  Input should be 'completion/complete' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CompleteRequest.params.ref
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CompleteRequest.params.argument
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+SetLevelRequest.method
+  Input should be 'logging/setLevel' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+SetLevelRequest.params.level
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+GetPromptRequest.method
+  Input should be 'prompts/get' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetPromptRequest.params.name
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListPromptsRequest.method
+  Input should be 'prompts/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ListResourcesRequest.method
+  Input should be 'resources/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ListResourceTemplatesRequest.method
+  Input should be 'resources/templates/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ReadResourceRequest.method
+  Input should be 'resources/read' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ReadResourceRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+SubscribeRequest.method
+  Input should be 'resources/subscribe' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+SubscribeRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+UnsubscribeRequest.method
+  Input should be 'resources/unsubscribe' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+UnsubscribeRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CallToolRequest.method
+  Input should be 'tools/call' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CallToolRequest.params.name
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListToolsRequest.method
+  Input should be 'tools/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskRequest.method
+  Input should be 'tasks/get' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+GetTaskPayloadRequest.method
+  Input should be 'tasks/result' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskPayloadRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListTasksRequest.method
+  Input should be 'tasks/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CancelTaskRequest.method
+  Input should be 'tasks/cancel' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CancelTaskRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...4-139cdb4d8020ccc4-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+2026-10-10 09:50:51,037 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2026-10-10 09:50:51,317 - httpx - INFO - HTTP Request: GET https://mf6mtem9b3.re.qweatherapi.com/geo/v2/city/lookup?location=%E5%8C%97%E4%BA%AC "HTTP/1.1 200 "
+2026-10-10 09:50:51,318 - hefeng_qweather_mcp - INFO - 成功获取城市 '北京' 的LocationID: 101010100
+2026-10-10 09:50:51,516 - httpx - INFO - HTTP Request: GET https://mf6mtem9b3.re.qweatherapi.com/v7/weather/now?location=101010100&lang=zh&unit=m "HTTP/1.1 200 "
+2026-10-10 09:50:51,517 - hefeng_qweather_mcp - INFO - 成功获取 '北京' 的实况天气数据
+2026-10-10 09:50:51,522 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+INFO:     127.0.0.1:39192 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39192 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52030 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:52030 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48432 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:48432 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39228 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39228 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39238 - "POST /mcp HTTP/1.1" 200 OK
+2026-10-10 09:52:28,388 - hefeng_qweather_mcp - INFO - 使用API KEY认证模式
+2026-10-10 09:52:28,388 - hefeng_qweather_mcp - INFO - API主机: mf6mtem9b3.re.qweatherapi.com
+2026-10-10 09:52:28,388 - hefeng_qweather_mcp - INFO - API KEY: fe297e1562...
+2026-10-10 09:52:28,433 - hefeng_qweather_mcp - INFO - 正在启动和风天气MCP服务...
+2026-10-10 09:52:28,433 - hefeng_qweather_mcp - INFO - API主机: mf6mtem9b3.re.qweatherapi.com
+2026-10-10 09:52:28,433 - hefeng_qweather_mcp - INFO - API KEY: fe297e1562...
+2026-10-10 09:52:28,433 - hefeng_qweather_mcp - INFO - 服务启动成功，等待连接...
+2026-10-10 09:52:28,448 - root - WARNING - Failed to validate request: 31 validation errors for ClientRequest
+PingRequest.method
+  Input should be 'ping' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+InitializeRequest.method
+  Input should be 'initialize' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+InitializeRequest.params.protocolVersion
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+InitializeRequest.params.capabilities
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+InitializeRequest.params.clientInfo
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CompleteRequest.method
+  Input should be 'completion/complete' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CompleteRequest.params.ref
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CompleteRequest.params.argument
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+SetLevelRequest.method
+  Input should be 'logging/setLevel' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+SetLevelRequest.params.level
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+GetPromptRequest.method
+  Input should be 'prompts/get' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetPromptRequest.params.name
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListPromptsRequest.method
+  Input should be 'prompts/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ListResourcesRequest.method
+  Input should be 'resources/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ListResourceTemplatesRequest.method
+  Input should be 'resources/templates/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ReadResourceRequest.method
+  Input should be 'resources/read' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+ReadResourceRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+SubscribeRequest.method
+  Input should be 'resources/subscribe' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+SubscribeRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+UnsubscribeRequest.method
+  Input should be 'resources/unsubscribe' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+UnsubscribeRequest.params.uri
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+CallToolRequest.method
+  Input should be 'tools/call' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CallToolRequest.params.name
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListToolsRequest.method
+  Input should be 'tools/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskRequest.method
+  Input should be 'tasks/get' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+GetTaskPayloadRequest.method
+  Input should be 'tasks/result' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+GetTaskPayloadRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+ListTasksRequest.method
+  Input should be 'tasks/list' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CancelTaskRequest.method
+  Input should be 'tasks/cancel' [type=literal_error, input_value='server/discover', input_type=str]
+    For further information visit https://errors.pydantic.dev/2.14/v/literal_error
+CancelTaskRequest.params.taskId
+  Field required [type=missing, input_value={'_meta': {'io.modelconte...b-db25fa197197e9e7-03'}}, input_type=dict]
+    For further information visit https://errors.pydantic.dev/2.14/v/missing
+2026-10-10 09:52:28,453 - mcp.server.lowlevel.server - INFO - Processing request of type CallToolRequest
+2026-10-10 09:52:28,662 - httpx - INFO - HTTP Request: GET https://mf6mtem9b3.re.qweatherapi.com/geo/v2/city/lookup?location=%E4%B8%8A%E6%B5%B7 "HTTP/1.1 200 "
+2026-10-10 09:52:28,662 - hefeng_qweather_mcp - INFO - 成功获取城市 '上海' 的LocationID: 101020100
+2026-10-10 09:52:28,832 - httpx - INFO - HTTP Request: GET https://mf6mtem9b3.re.qweatherapi.com/v7/weather/now?location=101020100&lang=zh&unit=m "HTTP/1.1 200 "
+2026-10-10 09:52:28,832 - hefeng_qweather_mcp - INFO - 成功获取 '上海' 的实况天气数据
+2026-10-10 09:52:28,838 - mcp.server.lowlevel.server - INFO - Processing request of type ListToolsRequest
+INFO:     127.0.0.1:39238 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:39238 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35782 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35782 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+2026-10-10 09:53:09,232 INFO mcp.server.streamable_http_manager StreamableHTTP session manager shutting down
+INFO:     Application shutdown complete.
+INFO:     Finished server process [3108458]

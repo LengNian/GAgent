@@ -37,8 +37,8 @@ class AgentManifestTests(unittest.TestCase):
 
         self.assertEqual(
             manifest.allowed_actions,
-            ["query_device_by_ip", "get_topology_graph", "get_realtime_metric",
-             "get_metric_range", "list_metric_names", "list_alarm_events",
+            ["get_topology_graph", "get_realtime_metric",
+             "get_metric_range", "list_metric_names",
              "get_weather_now", "get_weather"],
         )
         # 模型可见工具名必须与 allowlist 完全一致（不带 MCP 平台前缀），
@@ -55,7 +55,7 @@ class AgentManifestTests(unittest.TestCase):
         self.assertIn("iot_agent", {agent.agent_id for agent in config.agents})
         self.assertEqual(
             get_agent_manifest("iot_agent").skills,
-            ["metric_trend_analysis", "alarm_root_cause", "device_health_snapshot"],
+            ["metric_trend_analysis", "weather_aware_injection"],
         )
 
     def test_unknown_agent_is_rejected(self) -> None:

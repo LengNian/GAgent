@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import os
+import keyword
 from pathlib import Path
 from typing import Any, Literal
 
@@ -75,6 +76,14 @@ class ApiConfig(BaseModel):
     risk_level: Literal["low", "medium", "high", "critical"] = "low"
     requires_confirmation: bool = False
     argument_locations: dict[str, Literal["path", "query", "body"]] = Field(default_factory=dict)
+    # 由网关固定注入、不经过模型的查询参数。适用于中台必填、但取值对本工具恒定的参数：
+    # 实测 /api/v1/metric/datapoint 省略 mode 会直接被判业务码 40002，而 mode 对每个工具都是常量，
+    # 交给模型抄写只会新增“漏填”和“抄错致语义翻转”两类故障，因此在配置里钉死。
+    constant_query: dict[str, str] = Field(default_factory=dict)
+    # 工具参数名 -> 发给中台的 query 参数名（未命中则两边同名）。存在的原因：
+    # /api/v1/metric/datapoint 用 from/to 表达时间窗口，而 `from` 是 Python 关键字，
+    # server.py 靠 exec 拼函数形参时会直接 SyntaxError；因此工具侧沿用 start/end，只在出站时改名。
+    query_names: dict[str, str] = Field(default_factory=dict)
     input_schema: dict[str, Any]
     error_messages: dict[str, str] = Field(default_factory=dict)
     # 返回给 Agent 前应用的投影器名字，须与 mcp_gateway.projections.PROJECTIONS 的键一致；
@@ -105,6 +114,24 @@ class ApiConfig(BaseModel):
             raise ValueError(f"API {self.name}: required 引用了未声明的参数 {sorted(unknown_required)}")
         if self.method == "GET" and "body" in self.argument_locations.values():
             raise ValueError(f"API {self.name}: GET 请求不能有 body 参数")
+        # 常量参数不得与模型参数重名：重名会让“模型传的值”与“配置钉死的值”产生歧义
+        overlap = set(self.constant_query) & set(properties)
+        if overlap:
+            raise ValueError(f"API {self.name}: constant_query 与 input_schema 参数重名 {sorted(overlap)}")
+        # 参数名会被 server.py 用 exec 拼成函数形参，Python 关键字会当场语法错误；
+        # 在加载期拦住并提示改用 query_names 映射，不留到启动网关时才炸
+        keyword_names = [name for name in properties if keyword.iskeyword(name)]
+        if keyword_names:
+            raise ValueError(
+                f"API {self.name}: 参数名 {sorted(keyword_names)} 是 Python 关键字，不能直接作为工具参数；"
+                f"请用 query_names 将其映射到中台参数名"
+            )
+        unknown_aliases = set(self.query_names) - set(properties)
+        if unknown_aliases:
+            raise ValueError(f"API {self.name}: query_names 引用了未声明的参数 {sorted(unknown_aliases)}")
+        collided = set(self.query_names.values()) & (set(properties) - set(self.query_names))
+        if collided:
+            raise ValueError(f"API {self.name}: query_names 的目标名与其他参数重名 {sorted(collided)}")
         if self.risk_level in {"high", "critical"} and not self.requires_confirmation:
             raise ValueError(f"API {self.name}: 高风险操作必须要求人工确认")
         # 校验器依赖具体参数存在；配了却没声明参数属于配置错，不能留到运行期才发现
