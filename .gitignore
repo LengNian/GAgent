@@ -12,3 +12,4 @@ proto/
 docs/
 models/
 uvicorn.log
+logs/
